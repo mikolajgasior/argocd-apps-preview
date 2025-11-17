@@ -2,6 +2,7 @@ package argocd
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -19,10 +20,10 @@ type ArgoCD struct {
 	version string
 }
 
-func (a *ArgoCD) Install() error {
+func (a *ArgoCD) Install(ctx context.Context) error {
 	fmt.Fprintf(os.Stdout, "🍓 Creating namespace %s...\n", a.namespace)
 
-	err := a.kubeClient.CreateNamespace(a.namespace)
+	err := a.kubeClient.CreateNamespace(ctx, a.namespace)
 	if err != nil {
 		return fmt.Errorf("creating namespace: %w", err)
 	}
@@ -32,22 +33,30 @@ func (a *ArgoCD) Install() error {
 		return fmt.Errorf("downloading argocd manifest failed: %w", err)
 	}
 	defer os.Remove(installYaml)
-fmt.Fprint(os.Stdout, installYaml)
+
 	installYaml, err = UpdateManifestToAllowAllNamespaces(installYaml, a.namespace)
 	if err != nil {
 		return fmt.Errorf("updating argocd manifest to allow all namespaces: w", err)
 	}
-fmt.Fprint(os.Stdout, installYaml)
-	err = a.kubeClient.ApplyFile(installYaml, a.namespace)
+
+	err = a.kubeClient.ApplyFile(ctx, installYaml, a.namespace)
 	if err != nil {
 		return fmt.Errorf("applying argocd manifest: %w", err)
 	}
 
-	err = a.kubeClient.WaitForDeployment("argocd-server", a.namespace, 300)
+	err = a.kubeClient.WaitForDeployment(ctx, "argocd-server", a.namespace, 300)
 	if err != nil {
 		return fmt.Errorf("waiting for argocd: %w", err)
 	}
 
+	return nil
+}
+
+func (a *ArgoCD) PortForward(ctx context.Context, port int) error {
+	err := a.kubeClient.PortForward(ctx, "svc/argocd-server", a.namespace, 443, port)
+	if err != nil {
+		return fmt.Errorf("port forward for argocd")
+	}
 	return nil
 }
 

@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
+	"sync"
+	"time"
 
 	"github.com/keenbytes/argocd-apps-preview/pkg/argocd"
 	"github.com/keenbytes/argocd-apps-preview/pkg/kind"
@@ -17,6 +20,7 @@ const (
 	ArgoCDVersion = "v2.14.11"
 	DirManifests = "manifests"
 	DirSecrets = "secrets"
+	ArgoCDPortForward = 30080
 )
 
 const (
@@ -26,6 +30,7 @@ const (
 	ExitCreatingClusterFailed = 201
 	ExitDeletingClusterFailed = 202
 	ExitArgoCDInstallationFailed = 301
+	ExitArgoCDPortForwardFailed = 302
 )
 
 func main() {
@@ -42,26 +47,57 @@ func main() {
 	cluster := kind.NewKind(KindName, KindImage)
 	_ = cluster.Delete()
 
-	err := cluster.Create()
+	ctxCluster, cancelCluster := context.WithTimeout(context.Background(), 120 * time.Second)
+	defer cancelCluster()
+
+	err := cluster.Create(ctxCluster)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Error creating kind cluster: %s", err.Error())
 		cluster.Delete()
 		os.Exit(ExitCreatingClusterFailed)
 	}
 
-	kubeContext := getKubeContext()
-	kubeClient := kube.NewKube(kubeContext)
+	kubeClient := kube.NewKube(getKubeContext())
 
 	acd := argocd.NewArgoCD(kubeClient, ArgoCDNamespace, ArgoCDVersion)
-	err = acd.Install()
+
+	ctxArgoCD, cancelArgoCD := context.WithTimeout(context.Background(), 360 * time.Second)
+	defer cancelArgoCD()
+
+	err = acd.Install(ctxArgoCD)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Error installing argocd: %s", err.Error())
 		cluster.Delete()
 		os.Exit(ExitArgoCDInstallationFailed)
 	}
 
+	ctxPortForward, cancelPortForward := context.WithTimeout(context.Background(), 3600 * time.Second)
+	defer cancelPortForward()
+
+	waitGroup := &sync.WaitGroup{}
+	waitGroup.Add(2)
+
+	exitError := 0
+
+	go func() {
+		err = acd.PortForward(ctxPortForward, ArgoCDPortForward)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "❌ Error forwarding port to argocd: %s", err.Error())
+			exitError = ExitArgoCDPortForwardFailed
+		}
+		waitGroup.Done()
+	}()
+
+	go func() {
+		time.Sleep(60 * time.Second)
+		cancelPortForward()
+		waitGroup.Done()
+	}()
+
+	waitGroup.Wait()
+
 	cluster.Delete()
-	os.Exit(0)
+	os.Exit(exitError)
 }
 
 func checkPrerequisites() {

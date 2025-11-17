@@ -2,6 +2,7 @@ package command
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -29,15 +30,14 @@ var (
 )
 
 type Command struct {
-	cmd *exec.Cmd
+	name string
+	args []string
 	stdout *os.File
 	stderr *os.File
 	waitGroup *sync.WaitGroup
 }
 
 func NewCommand(name string, args ...string) (*Command, error) {
-	cmd := exec.Command(name, args...)
-
 	stdout, err := os.CreateTemp("", StdoutTmpFile)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrCreatingStdoutTmpFile, err)
@@ -49,7 +49,8 @@ func NewCommand(name string, args ...string) (*Command, error) {
 	}
 
 	command := &Command{
-		cmd: cmd,
+		name: name,
+		args: args,
 		stdout: stdout,
 		stderr: stderr,
 	}
@@ -57,49 +58,53 @@ func NewCommand(name string, args ...string) (*Command, error) {
 	return command, nil
 }
 
-func (c *Command) Run() error {
-	fmt.Fprintf(os.Stdout, "🍓 Running command: %s\n", strings.Join(c.cmd.Args, " "))
+func (c *Command) Run(ctx context.Context, env *map[string]string) error {
+	fmt.Fprintf(os.Stdout, "🍓 Running command: %s\n", strings.Join(c.args, " "))
 
-	err := c.createWaitGroup()
+	cmd := exec.CommandContext(ctx, c.name, c.args...)
+
+	err := c.createWaitGroup(cmd)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrCreatingWaitGroup, err)
 	}
 
-	if err := c.cmd.Start(); err != nil {
+	if env != nil && len(*env) > 0 {
+		for k, v := range *env {
+			cmd.Env = append(cmd.Environ(), fmt.Sprintf("%s=%s", k, v))
+		}
+	}
+
+	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("%w: %w", ErrStartingCommand, err)
 	}
 
 	c.waitGroup.Wait()
 
-	if err := c.cmd.Wait(); err != nil {
+	if err := cmd.Wait(); err != nil {
 		if exiterr, ok := err.(*exec.ExitError); ok {
 			return fmt.Errorf("%w: %s", ErrCommandReturnsNonZeroExitCode, exiterr)
-		} else {
-			return fmt.Errorf("%w: %w", ErrWaitingForCommand, err)
 		}
+		
+		if errors.Is(err, context.Canceled) {
+			return nil
+		}
+		
+		return fmt.Errorf("%w: %w", ErrWaitingForCommand, err)
 	}
 
 	return nil
 }
 
-func (c *Command) SetEnv(env *map[string]string) {
-	if env != nil && len(*env) > 0 {
-		for k, v := range *env {
-			c.cmd.Env = append(c.cmd.Environ(), fmt.Sprintf("%s=%s", k, v))
-		}
-	}
-}
-
-func (c *Command) createWaitGroup() error {
+func (c *Command) createWaitGroup(cmd *exec.Cmd) error {
 	c.waitGroup = &sync.WaitGroup{}
 	c.waitGroup.Add(2)
 
-	cmdStdoutReader, err := c.cmd.StdoutPipe()
+	cmdStdoutReader, err := cmd.StdoutPipe()
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrPipingStdout, err)
 	}
 
-	cmdStderrReader, err := c.cmd.StderrPipe()
+	cmdStderrReader, err := cmd.StderrPipe()
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrPipingStderr, err)
 	}
@@ -113,6 +118,7 @@ func (c *Command) createWaitGroup() error {
 		}
 		c.waitGroup.Done()
 	}()
+
 	go func() {
 		scanner := bufio.NewScanner(cmdStderrReader)
 		var writer io.Writer

@@ -1,6 +1,7 @@
 package kind
 
 import (
+	"context"
 	"fmt"
 	"os"
 
@@ -12,7 +13,7 @@ type Kind struct {
 	image string
 }
 
-func (k *Kind) Create() error {
+func (k *Kind) Create(ctx context.Context) error {
 	fmt.Fprintf(os.Stdout, "🍓 Creating cluster...\n")
 
 	command, err := command.NewCommand("kind", "create", "cluster", "-n", k.name, "--image", k.image)
@@ -20,7 +21,7 @@ func (k *Kind) Create() error {
 		return fmt.Errorf("creating command to create kind cluster: %w", err)
 	}
 
-	err = command.Run()
+	err = command.Run(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("command creating kind cluster failed: %w", err)
 	}
@@ -31,11 +32,13 @@ func (k *Kind) Create() error {
 func (k *Kind) Delete() error {
 	fmt.Fprintf(os.Stdout, "🍓 Deleting cluster...\n")
 
+	ctx := context.Background()
+
 	cmd, err := command.NewCommand("kind", "get", "clusters")
 	if err != nil {
 		return fmt.Errorf("creating command for getting kind clusters")
 	}
-	err = cmd.Run()
+	err = cmd.Run(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("command getting kind cluster failed: %w", err)
 	}
@@ -44,7 +47,7 @@ func (k *Kind) Delete() error {
 	if err != nil {
 		return fmt.Errorf("creating command for deleting kind cluster: %w", err)
 	}
-	err = cmd.Run()
+	err = cmd.Run(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("command deleting kind cluster failed: %w", err)
 	}
