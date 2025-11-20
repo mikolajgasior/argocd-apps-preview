@@ -37,6 +37,10 @@ type Command struct {
 	waitGroup *sync.WaitGroup
 }
 
+func (c *Command) Stdout() *os.File {
+	return c.stdout
+}
+
 func NewCommand(name string, args ...string) (*Command, error) {
 	stdout, err := os.CreateTemp("", StdoutTmpFile)
 	if err != nil {
@@ -59,7 +63,7 @@ func NewCommand(name string, args ...string) (*Command, error) {
 }
 
 func (c *Command) Run(ctx context.Context, env *map[string]string) error {
-	fmt.Fprintf(os.Stdout, "🍓 Running command: %s\n", strings.Join(c.args, " "))
+	fmt.Fprintf(os.Stdout, "🍓 Running command: %s %s\n", c.name, strings.Join(c.args, " "))
 
 	cmd := exec.CommandContext(ctx, c.name, c.args...)
 

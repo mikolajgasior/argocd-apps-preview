@@ -33,10 +33,6 @@ const (
 )
 
 func main() {
-	// 05. install argocd - before that modify the ClusterRoleBinding -> kubectl
-		// + wait until it's deployed
-	  // + port-forward 8080:443
-	// 06. login to argocd cd -> get passwd from kube then call argocd login
 	// 07. apply secrets
 	// 08. apply initial application(s)
 	// 09. recursively scan and apply applications
@@ -70,7 +66,16 @@ func main() {
 		os.Exit(ExitArgoCDInstallationFailed)
 	}
 
-	//cluster.Delete()
+	time.Sleep(4 * time.Second)
+
+	err = acd.Login(ctxArgoCD)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Error logging into argocd: %s", err.Error())
+		cluster.Delete()
+		os.Exit(ExitArgoCDInstallationFailed)
+	}
+
+	cluster.Delete()
 	os.Exit(0)
 }
 

@@ -3,10 +3,13 @@ package argocd
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
+	"log"
 	"os"
 
+	"github.com/keenbytes/argocd-apps-preview/pkg/command"
 	"github.com/keenbytes/argocd-apps-preview/pkg/files"
 	"github.com/keenbytes/argocd-apps-preview/pkg/kube"
 	"gopkg.in/yaml.v3"
@@ -48,6 +51,58 @@ func (a *ArgoCD) Install(ctx context.Context) error {
 	err = a.kubeClient.WaitForDeployment(ctx, "argocd-server", a.namespace, 300)
 	if err != nil {
 		return fmt.Errorf("waiting for argocd: %w", err)
+	}
+
+	return nil
+}
+
+func (a *ArgoCD) Login(ctx context.Context) error {
+	fmt.Fprintf(os.Stdout, "🍓 Logging in to ArgoCD...\n")
+
+	cmd, err := command.NewCommand("kubectl", "get", "secret", "-n", a.namespace, "argocd-initial-admin-secret", "-o", `jsonpath={.data.password}`)
+	if err != nil {
+		return fmt.Errorf("creating command for getting kind clusters")
+	}
+
+	err = cmd.Run(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("command getting kind cluster failed: %w", err)
+	}
+
+	password, err := os.ReadFile(cmd.Stdout().Name())
+	if err != nil {
+		return fmt.Errorf("getting argocd password output file: %w", err)
+	}
+
+	decodedPassword, err := base64.StdEncoding.DecodeString(string(password))
+	if err != nil {
+		log.Fatalf("base64 decode failed: %v", err)
+	}
+
+	cmd, err = command.NewCommand("argocd", "login", fmt.Sprintf("localhost:%d", a.nodePort), "--insecure", "--username", "admin", "--password", string(decodedPassword), "--grpc-web")
+	if err != nil {
+		return fmt.Errorf("creating command for logging to argocd")
+	}
+
+	err = cmd.Run(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("command for logging to argocd failed: %w", err)
+	}
+
+	return nil
+}
+
+func (a *ArgoCD) Logout(ctx context.Context) error {
+	fmt.Fprintf(os.Stdout, "🍓 Logging out from ArgoCD...\n")
+
+	cmd, err := command.NewCommand("argocd", "logout")
+	if err != nil {
+		return fmt.Errorf("creating command for logging out of argocd")
+	}
+
+	err = cmd.Run(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("command for logging out of argocd failed: %w", err)
 	}
 
 	return nil
