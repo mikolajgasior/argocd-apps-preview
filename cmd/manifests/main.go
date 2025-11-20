@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/keenbytes/argocd-apps-preview/pkg/argocd"
@@ -30,10 +32,12 @@ const (
 	ExitDeletingClusterFailed = 202
 	ExitArgoCDInstallationFailed = 301
 	ExitArgoCDPortForwardFailed = 302
+	ExitArgoCDLoggingFailed = 303
+	ExitApplyingSecretsFailed = 304
+	ExitApplyingManifestsFailed = 305
 )
 
 func main() {
-	// 07. apply secrets
 	// 08. apply initial application(s)
 	// 09. recursively scan and apply applications
 	// 10. dump applications from argocd
@@ -72,7 +76,21 @@ func main() {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Error logging into argocd: %s", err.Error())
 		cluster.Delete()
-		os.Exit(ExitArgoCDInstallationFailed)
+		os.Exit(ExitArgoCDLoggingFailed)
+	}
+
+	err = applyManifestsFromDir(ctxArgoCD, kubeClient, DirSecrets, ArgoCDNamespace)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Error applying files from secrets directory: %s", err.Error())
+		cluster.Delete()
+		os.Exit(ExitApplyingSecretsFailed)
+	}
+
+	err = applyManifestsFromDir(ctxArgoCD, kubeClient, DirManifests, "")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Error applying files from manifests directory: %s", err.Error())
+		cluster.Delete()
+		os.Exit(ExitApplyingManifestsFailed)
 	}
 
 	cluster.Delete()
@@ -103,4 +121,41 @@ func checkPrerequisites() {
 
 func getKubeContext() string {
 	return fmt.Sprintf("kind-%s", KindName)
+}
+
+func applyManifestsFromDir(ctx context.Context, kubeClient *kube.Kube, dir string, namespace string) error {
+	info, err := os.Stat(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("getting stat for directory %s: %w", dir, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s exists but is not a directory", dir)
+	}
+
+	err = filepath.WalkDir(dir, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+
+		if d.IsDir() {
+			return nil
+		}
+
+		ext := strings.ToLower(filepath.Ext(d.Name()))
+		if ext == ".yaml" || ext == ".yml" {
+			err2 := kubeClient.ApplyFile(ctx, path, namespace)
+			if err2 != nil {
+				return fmt.Errorf("applying manifest from %s: %w", dir, err2)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("walking directory %s: %v", dir, err)
+	}
+
+	return nil	
 }
