@@ -18,6 +18,7 @@ type ArgoCD struct {
 	namespace string
 	started bool
 	version string
+	nodePort int
 }
 
 func (a *ArgoCD) Install(ctx context.Context) error {
@@ -34,9 +35,9 @@ func (a *ArgoCD) Install(ctx context.Context) error {
 	}
 	defer os.Remove(installYaml)
 
-	installYaml, err = UpdateManifestToAllowAllNamespaces(installYaml, a.namespace)
+	installYaml, err = UpdateManifest(installYaml, a.namespace, a.nodePort)
 	if err != nil {
-		return fmt.Errorf("updating argocd manifest to allow all namespaces: w", err)
+		return fmt.Errorf("updating argocd manifest: %w", err)
 	}
 
 	err = a.kubeClient.ApplyFile(ctx, installYaml, a.namespace)
@@ -60,11 +61,12 @@ func (a *ArgoCD) PortForward(ctx context.Context, port int) error {
 	return nil
 }
 
-func NewArgoCD(kubeClient *kube.Kube, namespace string, version string) *ArgoCD {
+func NewArgoCD(kubeClient *kube.Kube, namespace string, version string, nodePort int) *ArgoCD {
 	argocd := &ArgoCD{
 		namespace: namespace,
 		kubeClient: kubeClient,
 		version: version,
+		nodePort: nodePort,
 	}
 
 	return argocd
@@ -74,7 +76,7 @@ func GetArgoCDManifestURL(version string) string {
 	return fmt.Sprintf("https://raw.githubusercontent.com/argoproj/argo-cd/refs/tags/%s/manifests/install.yaml", version)
 }
 
-func UpdateManifestToAllowAllNamespaces(path string, namespace string) (string, error) {
+func UpdateManifest(path string, namespace string, nodePort int) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		panic(err)
@@ -87,8 +89,6 @@ func UpdateManifestToAllowAllNamespaces(path string, namespace string) (string, 
 	encoder := yaml.NewEncoder(&outBuf)
 	encoder.SetIndent(2)
 
-	const target = "argocd-cmd-params-cm"
-
 	for {
 		var raw map[string]interface{}
 		if err := decoder.Decode(&raw); err != nil {
@@ -100,12 +100,16 @@ func UpdateManifestToAllowAllNamespaces(path string, namespace string) (string, 
 
 		u := &unstructured.Unstructured{Object: raw}
 
-		if err := patchCmdParamsCm(u, target); err != nil {
+		if err := patchCmdParamsCm(u); err != nil {
 			return "", fmt.Errorf("patching cmd-params-cm resource error: %w", err)
 		}
 
 		if err := patchClusterRoleBinding(u, namespace); err != nil {
 			return "", fmt.Errorf("patching ClusterRoleBinding resource error: %w", err)
+		}
+
+		if err := patchServerService(u, nodePort); err != nil {
+			return "", fmt.Errorf("patching server service resource error: %w", err)
 		}
 
 		if err := encoder.Encode(u.Object); err != nil {
@@ -124,8 +128,8 @@ func UpdateManifestToAllowAllNamespaces(path string, namespace string) (string, 
 	return outPath, nil
 }
 
-func patchCmdParamsCm(obj *unstructured.Unstructured, targetName string) error {
-	if obj.GetName() != targetName {
+func patchCmdParamsCm(obj *unstructured.Unstructured) error {
+	if obj.GetName() != "argocd-cmd-params-cm" {
 		return nil
 	}
 
@@ -170,5 +174,33 @@ func patchClusterRoleBinding(u *unstructured.Unstructured, namespace string) err
 	if err := unstructured.SetNestedSlice(u.Object, subjects, "subjects"); err != nil {
 		return fmt.Errorf("writing .subjects: %w", err)
 	}
+	return nil
+}
+
+func patchServerService(u *unstructured.Unstructured, nodePort int) error {
+	if u.GetKind() != "Service" || u.GetName() != "argocd-server" {
+		return nil
+	}
+
+	if err := unstructured.SetNestedField(u.Object, "NodePort", "spec", "type"); err != nil {
+		return fmt.Errorf("setting spec.type: %w", err)
+	}
+
+	buildPort := func(name string, port, targetPort, nodePort int) map[string]interface{} {
+		return map[string]interface{}{
+			"name":        name,
+			"port":        int64(port),
+			"targetPort":  int64(targetPort),
+			"nodePort":    int64(nodePort),
+		}
+	}
+
+	httpsPortSpec := buildPort("https", 443, 8080, nodePort)
+
+	newPorts := []interface{}{httpsPortSpec}
+	if err := unstructured.SetNestedSlice(u.Object, newPorts, "spec", "ports"); err != nil {
+		return fmt.Errorf("seting spec.ports: %w", err)
+	}
+
 	return nil
 }

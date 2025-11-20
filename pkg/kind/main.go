@@ -2,11 +2,17 @@ package kind
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
+	"io/fs"
 	"os"
+	"path/filepath"
 
 	"github.com/keenbytes/argocd-apps-preview/pkg/command"
 )
+
+//go:embed cluster.yml
+var clusterConfig []byte
 
 type Kind struct {
 	name string
@@ -16,7 +22,12 @@ type Kind struct {
 func (k *Kind) Create(ctx context.Context) error {
 	fmt.Fprintf(os.Stdout, "🍓 Creating cluster...\n")
 
-	command, err := command.NewCommand("kind", "create", "cluster", "-n", k.name, "--image", k.image)
+	config, err := writeEmbeddedYAMLToTemp()
+	if err != nil {
+		return fmt.Errorf("writing cluster config")
+	}
+
+	command, err := command.NewCommand("kind", "create", "cluster", "-n", k.name, "--image", k.image, "--config", config)
 	if err != nil {
 		return fmt.Errorf("creating command to create kind cluster: %w", err)
 	}
@@ -59,4 +70,20 @@ func NewKind(name string, image string) *Kind {
 	kind := &Kind{}
 	kind.name = name
 	return kind
+}
+
+func writeEmbeddedYAMLToTemp() (string, error) {
+	tmpDir, err := os.MkdirTemp("", "cluster-yaml-*")
+	if err != nil {
+		return "", fmt.Errorf("creating temp dir: %w", err)
+	}
+
+	tmpPath := filepath.Join(tmpDir, "cluster.yml")
+
+	if err := os.WriteFile(tmpPath, clusterConfig, fs.FileMode(0600)); err != nil {
+		_ = os.RemoveAll(tmpDir)
+		return "", fmt.Errorf("writing yaml to %s: %w", tmpPath, err)
+	}
+
+	return tmpPath, nil
 }

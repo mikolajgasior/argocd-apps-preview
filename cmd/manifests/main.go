@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"sync"
 	"time"
 
 	"github.com/keenbytes/argocd-apps-preview/pkg/argocd"
@@ -20,7 +19,7 @@ const (
 	ArgoCDVersion = "v2.14.11"
 	DirManifests = "manifests"
 	DirSecrets = "secrets"
-	ArgoCDPortForward = 30080
+	ArgoCDNodePort = 30443
 )
 
 const (
@@ -59,7 +58,7 @@ func main() {
 
 	kubeClient := kube.NewKube(getKubeContext())
 
-	acd := argocd.NewArgoCD(kubeClient, ArgoCDNamespace, ArgoCDVersion)
+	acd := argocd.NewArgoCD(kubeClient, ArgoCDNamespace, ArgoCDVersion, ArgoCDNodePort)
 
 	ctxArgoCD, cancelArgoCD := context.WithTimeout(context.Background(), 360 * time.Second)
 	defer cancelArgoCD()
@@ -71,33 +70,8 @@ func main() {
 		os.Exit(ExitArgoCDInstallationFailed)
 	}
 
-	ctxPortForward, cancelPortForward := context.WithTimeout(context.Background(), 3600 * time.Second)
-	defer cancelPortForward()
-
-	waitGroup := &sync.WaitGroup{}
-	waitGroup.Add(2)
-
-	exitError := 0
-
-	go func() {
-		err = acd.PortForward(ctxPortForward, ArgoCDPortForward)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "❌ Error forwarding port to argocd: %s", err.Error())
-			exitError = ExitArgoCDPortForwardFailed
-		}
-		waitGroup.Done()
-	}()
-
-	go func() {
-		time.Sleep(60 * time.Second)
-		cancelPortForward()
-		waitGroup.Done()
-	}()
-
-	waitGroup.Wait()
-
-	cluster.Delete()
-	os.Exit(exitError)
+	//cluster.Delete()
+	os.Exit(0)
 }
 
 func checkPrerequisites() {
