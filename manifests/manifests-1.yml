@@ -1,0 +1,45 @@
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root-app-a
+  namespace: tools
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/keenbytes/apps-of-apps-example
+    targetRevision: HEAD
+    path: apps/first-level/a
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated: {}
+---
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: sub-set-c
+  namespace: tools
+spec:
+  generators:
+    - git:
+        repoURL: https://github.com/keenbytes/apps-of-apps-example
+        revision: HEAD
+        directories:
+          - path: apps/second-level/c1
+          - path: apps/second-level/c2
+  template:
+    metadata:
+      name: '{{path.basename}}-app'
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/keenbytes/apps-of-apps-example
+        targetRevision: HEAD
+        path: '{{path}}'
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: default
+      syncPolicy:
+        automated: {}

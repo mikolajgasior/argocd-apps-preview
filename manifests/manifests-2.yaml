@@ -1,0 +1,59 @@
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root-app-b
+  namespace: tools
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/keenbytes/apps-of-apps-example
+    targetRevision: HEAD
+    path: apps/first-level/b
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated: {}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: example-config
+  namespace: tools
+  labels:
+    app: my‑app
+data:
+  config.yaml: |
+    server:
+      port: 8080
+    database:
+      host: db.example.com
+      name: mydb
+---
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: sub-set-d
+  namespace: tools
+spec:
+  generators:
+    - git:
+        repoURL: https://github.com/keenbytes/apps-of-apps-example
+        revision: HEAD
+        directories:
+          - path: apps/second-level/d1
+  template:
+    metadata:
+      name: '{{path.basename}}-app'
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/keenbytes/apps-of-apps-example
+        targetRevision: HEAD
+        path: '{{path}}'
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: default
+      syncPolicy:
+        automated: {}

@@ -17,7 +17,7 @@ import (
 const (
 	KindName = "argocd-app-prev"
 	KindImage = "kindest/node:v1.33.4"
-	ArgoCDNamespace = "deployments"
+	ArgoCDNamespace = "tools"
 	ArgoCDVersion = "v2.14.11"
 	DirManifests = "manifests"
 	DirSecrets = "secrets"
@@ -79,21 +79,21 @@ func main() {
 		os.Exit(ExitArgoCDLoggingFailed)
 	}
 
-	err = applyManifestsFromDir(ctxArgoCD, kubeClient, DirSecrets, ArgoCDNamespace)
+	err = applyManifests(ctxArgoCD, kubeClient, DirSecrets, ArgoCDNamespace)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Error applying files from secrets directory: %s", err.Error())
 		cluster.Delete()
 		os.Exit(ExitApplyingSecretsFailed)
 	}
 
-	err = applyManifestsFromDir(ctxArgoCD, kubeClient, DirManifests, "")
+	err = applyAppManifestsFromDir(ctxArgoCD, kubeClient, acd, DirManifests, "")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Error applying files from manifests directory: %s", err.Error())
+		fmt.Fprintf(os.Stderr, "❌ Error applying applications from manifests directory: %s", err.Error())
 		cluster.Delete()
 		os.Exit(ExitApplyingManifestsFailed)
 	}
 
-	cluster.Delete()
+	//cluster.Delete()
 	os.Exit(0)
 }
 
@@ -123,7 +123,7 @@ func getKubeContext() string {
 	return fmt.Sprintf("kind-%s", KindName)
 }
 
-func applyManifestsFromDir(ctx context.Context, kubeClient *kube.Kube, dir string, namespace string) error {
+func applyManifests(ctx context.Context, kubeClient *kube.Kube, dir string, namespace string) error {
 	info, err := os.Stat(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -150,6 +150,60 @@ func applyManifestsFromDir(ctx context.Context, kubeClient *kube.Kube, dir strin
 			if err2 != nil {
 				return fmt.Errorf("applying manifest from %s: %w", dir, err2)
 			}
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("walking directory %s: %v", dir, err)
+	}
+
+	return nil	
+}
+
+func applyAppManifestsFromDir(ctx context.Context, kubeClient *kube.Kube, acd *argocd.ArgoCD, dir string, namespace string) error {
+	info, err := os.Stat(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("getting stat for directory %s: %w", dir, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s exists but is not a directory", dir)
+	}
+
+	err = filepath.WalkDir(dir, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+
+		if d.IsDir() {
+			return nil
+		}
+
+		ext := strings.ToLower(filepath.Ext(d.Name()))
+		if ext == ".yaml" || ext == ".yml" {
+			apps, appSets, err := kube.ExtractAppsFromYAML(path)
+			if err != nil {
+				return fmt.Errorf("extracting apps from yaml: %w", err)
+			}
+
+			if len(appSets) > 0 {
+				for _, appSet := range appSets {
+					genApps, err := acd.GenerateAppsFromAppSets(ctx, appSet)
+					if err != nil {
+						base := filepath.Base(appSet)
+						
+						return fmt.Errorf("generating apps from appset %s: %w", base, err)
+					}
+
+					for _, genApp := range genApps {
+						apps = append(apps, genApp)
+					}
+				}
+			}
+
+			fmt.Printf("%v\n", apps)
 		}
 		return nil
 	})

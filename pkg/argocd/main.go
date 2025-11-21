@@ -116,6 +116,30 @@ func (a *ArgoCD) PortForward(ctx context.Context, port int) error {
 	return nil
 }
 
+func (a *ArgoCD) GenerateAppsFromAppSets(ctx context.Context, path string) ([]string, error) {
+	cmd, err := command.NewCommand("argocd", "appset", "generate", path, "-o", "yaml")
+	if err != nil {
+		return []string{}, fmt.Errorf("creating command for generating apps")
+	}
+
+	err = cmd.Run(ctx, nil)
+	if err != nil {
+		return []string{}, fmt.Errorf("command for generating apps failed: %w", err)
+	}
+
+	fixedPath, err := FixAppsetGenerateList(cmd.Stdout().Name())
+	if err != nil {
+		return []string{}, fmt.Errorf("fixing appset generate list: %w", err)
+	}
+
+	apps, _, err := kube.ExtractAppsFromYAML(fixedPath)
+	if err != nil {
+		return []string{}, fmt.Errorf("extracting apps from yaml: %w", err)
+	}
+
+	return apps, nil
+}
+
 func NewArgoCD(kubeClient *kube.Kube, namespace string, version string, nodePort int) *ArgoCD {
 	argocd := &ArgoCD{
 		namespace: namespace,
@@ -181,6 +205,54 @@ func UpdateManifest(path string, namespace string, nodePort int) (string, error)
 	}
 
 	return outPath, nil
+}
+
+func FixAppsetGenerateList(path string) (string, error) {
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("reading file %s: %w", path, err)
+	}
+
+	var list []interface{}
+	err = yaml.Unmarshal(contents, &list)
+	if err != nil {
+		return path, nil
+	}
+
+	dstPath := path + "__fixed.yaml"
+	out, err := os.Create(dstPath)
+	if err != nil {
+		return "", fmt.Errorf("cannot create %s: %w", dstPath, err)
+	}
+	defer func() {
+		if cerr := out.Close(); cerr != nil && err == nil {
+			err = fmt.Errorf("cannot close %s: %w", dstPath, cerr)
+		}
+	}()
+
+	for i, elem := range list {
+		y, err := yaml.Marshal(elem)
+		if err != nil {
+			return "", fmt.Errorf("cannot marshal element %d: %w", i, err)
+		}
+
+		if i > 0 {
+			if _, err := out.Write([]byte("---\n")); err != nil {
+				return "", fmt.Errorf("cannot write separator: %w", err)
+			}
+		}
+
+		// Write the element itself.  Ensure it ends with a newline for
+		// readability (yaml.Marshal already adds one, but we guard anyway).
+		if !bytes.HasSuffix(y, []byte("\n")) {
+			y = append(y, '\n')
+		}
+		if _, err := out.Write(y); err != nil {
+			return "", fmt.Errorf("cannot write element %d: %w", i, err)
+		}
+	}
+
+	return dstPath, nil
 }
 
 func patchCmdParamsCm(obj *unstructured.Unstructured) error {

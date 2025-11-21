@@ -31,4 +31,4 @@ go.work.sum
 # .idea/
 # .vscode/
 
-/cmd/manifests/manifests
+/cmd/apps/apps
