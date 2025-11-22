@@ -104,7 +104,7 @@ func AppendUniqueString(slice []interface{}, val string) []interface{} {
 	return append(slice, val)
 }
 
-func ExtractAppsFromYAML(path string) ([]string, []string, error) {
+func ExtractAppsFromYAML(path string) ([]string, []string, []string, error) {
 f, err := os.Open(path)
 	if err != nil {
 		panic(err)
@@ -113,11 +113,12 @@ f, err := os.Open(path)
 
 	tmpDir, err := os.MkdirTemp("", "apps-*")
 	if err != nil {
-		return []string{}, []string{}, fmt.Errorf("creating temp dir for extracted apps from manifests: %w", err)
+		return []string{}, []string{}, []string{}, fmt.Errorf("creating temp dir for extracted apps from manifests: %w", err)
 	}
 
 	apps := []string{}
 	appSets := []string{}
+	appProjects := []string{}
 
 	decoder := yamlStd.NewDecoder(f)
 
@@ -131,12 +132,12 @@ f, err := os.Open(path)
 			if err == io.EOF {
 				break
 			}
-			return []string{}, []string{}, fmt.Errorf("yaml decode error: %w", err)
+			return []string{}, []string{}, []string{}, fmt.Errorf("yaml decode error: %w", err)
 		}
 
 		u := &unstructured.Unstructured{Object: raw}
 		kind := u.GetKind()
-		if kind != "Application" && kind != "ApplicationSet" {
+		if kind != "Application" && kind != "ApplicationSet" && kind != "AppProject" {
 			continue
 		}
 
@@ -151,31 +152,35 @@ f, err := os.Open(path)
 
 			existing, _, err := unstructured.NestedSlice(u.Object, yamlPath...)
 			if err != nil {
-				return []string{}, []string{}, fmt.Errorf("reading %v: %v", path, err)
+				return []string{}, []string{}, []string{}, fmt.Errorf("reading %v: %v", path, err)
 			}
 
 			newSlice := AppendUniqueString(existing, optKey)
 
 			if err := unstructured.SetNestedSlice(u.Object, newSlice, yamlPath...); err != nil {
-				return []string{}, []string{}, fmt.Errorf("setting %v failed: %v", path, err)
+				return []string{}, []string{}, []string{}, fmt.Errorf("setting %v failed: %v", path, err)
 			}
 		}
 
 		outFile := fmt.Sprintf("%s/%s___%s___%s.yaml", tmpDir, kind, appNamespace, appName)
 		if err := WriteObjectAsYAML(u, outFile); err != nil {
-			return []string{}, []string{}, fmt.Errorf("cannot write %s: %w", outFile, err)
+			return []string{}, []string{}, []string{}, fmt.Errorf("cannot write %s: %w", outFile, err)
 		}
 
-		if kind == "Application" {
+		switch kind {
+		case "Application":
 			apps = append(apps, outFile)
-		} else {
+		case "ApplicationSet":
 			appSets = append(appSets, outFile)
+		case "AppProject":
+			appProjects = append(appProjects, outFile)
+		default:
 		}
 	}
 
 	_ = encoder.Close()
 
-	return apps, appSets, nil
+	return apps, appSets, appProjects, nil
 }
 
 func WriteObjectAsYAML(obj *unstructured.Unstructured, outPath string) error {

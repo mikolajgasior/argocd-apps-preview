@@ -8,6 +8,8 @@ import (
 	"io"
 	"log"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/keenbytes/argocd-apps-preview/pkg/command"
 	"github.com/keenbytes/argocd-apps-preview/pkg/files"
@@ -132,12 +134,69 @@ func (a *ArgoCD) GenerateAppsFromAppSets(ctx context.Context, path string) ([]st
 		return []string{}, fmt.Errorf("fixing appset generate list: %w", err)
 	}
 
-	apps, _, err := kube.ExtractAppsFromYAML(fixedPath)
+	apps, _, _, err := kube.ExtractAppsFromYAML(fixedPath)
 	if err != nil {
 		return []string{}, fmt.Errorf("extracting apps from yaml: %w", err)
 	}
 
 	return apps, nil
+}
+
+func (a *ArgoCD) GetAppList(ctx context.Context) ([]string, error) {
+	cmd, err := command.NewCommand("argocd", "app", "list", "-o", "name")
+	if err != nil {
+		return []string{}, fmt.Errorf("creating command for getting app list")
+	}
+
+	err = cmd.Run(ctx, nil)
+	if err != nil {
+		return []string{}, fmt.Errorf("command for getting app list failed: %w", err)
+	}
+
+	output, err := os.ReadFile(cmd.Stdout().Name())
+	if err != nil {
+		return []string{}, fmt.Errorf("reading stdout file: %w", err)
+	}
+
+	apps := strings.Split(string(output), "\n")
+
+	return apps, nil
+}
+
+func (a *ArgoCD) WaitForAppManifests(ctx context.Context, app string) error {
+	retry := 0
+	maxRetries := 15
+	for {
+		_, err := a.GetAppManifests(ctx, app)
+		if err == nil {
+			return nil
+		}
+
+		if retry == maxRetries {
+			return fmt.Errorf("command for getting app %s manifests failed %d times: %w", app, maxRetries, err)
+		}
+
+		time.Sleep(time.Second)
+		retry++
+	}
+}
+
+func (a *ArgoCD) GetAppManifests(ctx context.Context, app string) (string, error) {
+	cmd, err := command.NewCommand("argocd", "app", "manifests", app)
+	if err != nil {
+		return "", fmt.Errorf("creating command for getting app %s manifests", app)
+	}
+
+	err = cmd.Run(ctx, nil)
+	if err != nil {
+		return "", fmt.Errorf("command for getting app %s manifests: %w", app, err)
+	}
+
+	return cmd.Stdout().Name(), nil
+}
+
+func (a *ArgoCD) Namespace() string {
+	return a.namespace
 }
 
 func NewArgoCD(kubeClient *kube.Kube, namespace string, version string, nodePort int) *ArgoCD {

@@ -2,14 +2,14 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: root-app-a
+  name: a-app
   namespace: tools
 spec:
   project: default
   source:
     repoURL: https://github.com/keenbytes/apps-of-apps-example
     targetRevision: HEAD
-    path: apps/first-level/a
+    path: app/a
   destination:
     server: https://kubernetes.default.svc
     namespace: argocd
@@ -19,7 +19,7 @@ spec:
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
-  name: sub-set-c
+  name: c-set
   namespace: tools
 spec:
   generators:
@@ -27,8 +27,8 @@ spec:
         repoURL: https://github.com/keenbytes/apps-of-apps-example
         revision: HEAD
         directories:
-          - path: apps/second-level/c1
-          - path: apps/second-level/c2
+          - path: app/c1
+          - path: app/c2
   template:
     metadata:
       name: '{{path.basename}}-app'
@@ -40,6 +40,6 @@ spec:
         path: '{{path}}'
       destination:
         server: https://kubernetes.default.svc
-        namespace: default
+        namespace: tools
       syncPolicy:
         automated: {}

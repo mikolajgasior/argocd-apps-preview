@@ -22,6 +22,7 @@ const (
 	DirManifests = "manifests"
 	DirSecrets = "secrets"
 	ArgoCDNodePort = 30443
+	MaxRecursions = 6
 )
 
 const (
@@ -35,10 +36,10 @@ const (
 	ExitArgoCDLoggingFailed = 303
 	ExitApplyingSecretsFailed = 304
 	ExitApplyingManifestsFailed = 305
+	ExitRecursivelyApplyingAppsFailed = 306
 )
 
 func main() {
-	// 08. apply initial application(s)
 	// 09. recursively scan and apply applications
 	// 10. dump applications from argocd
 	checkPrerequisites()
@@ -86,11 +87,23 @@ func main() {
 		os.Exit(ExitApplyingSecretsFailed)
 	}
 
-	err = applyAppManifestsFromDir(ctxArgoCD, kubeClient, acd, DirManifests, "")
+	err = applyAppManifestsFromDir(ctxArgoCD, kubeClient, acd, DirManifests)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Error applying applications from manifests directory: %s", err.Error())
 		cluster.Delete()
 		os.Exit(ExitApplyingManifestsFailed)
+	}
+
+	ctxRecursiveApply, cancelRecursiveApply := context.WithTimeout(context.Background(), 360 * time.Second)
+	defer cancelRecursiveApply()
+
+	numRecursions := 0
+	processedApps := map[string]struct{}{}
+	err = recursivelyApplyApps(ctxRecursiveApply, kubeClient, acd, &numRecursions, &processedApps)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Error recursively applying applications: %s", err.Error())
+		cluster.Delete()
+		os.Exit(ExitRecursivelyApplyingAppsFailed)
 	}
 
 	//cluster.Delete()
@@ -160,7 +173,7 @@ func applyManifests(ctx context.Context, kubeClient *kube.Kube, dir string, name
 	return nil	
 }
 
-func applyAppManifestsFromDir(ctx context.Context, kubeClient *kube.Kube, acd *argocd.ArgoCD, dir string, namespace string) error {
+func applyAppManifestsFromDir(ctx context.Context, kubeClient *kube.Kube, acd *argocd.ArgoCD, dir string) error {
 	info, err := os.Stat(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -183,27 +196,10 @@ func applyAppManifestsFromDir(ctx context.Context, kubeClient *kube.Kube, acd *a
 
 		ext := strings.ToLower(filepath.Ext(d.Name()))
 		if ext == ".yaml" || ext == ".yml" {
-			apps, appSets, err := kube.ExtractAppsFromYAML(path)
-			if err != nil {
-				return fmt.Errorf("extracting apps from yaml: %w", err)
+			_, err2 := extractAndApplyAppsFromManifestsYAML(ctx, path, kubeClient, acd)
+			if err2 != nil {
+				return fmt.Errorf("extracting and applying apps from manifests yaml: %w", err2)
 			}
-
-			if len(appSets) > 0 {
-				for _, appSet := range appSets {
-					genApps, err := acd.GenerateAppsFromAppSets(ctx, appSet)
-					if err != nil {
-						base := filepath.Base(appSet)
-						
-						return fmt.Errorf("generating apps from appset %s: %w", base, err)
-					}
-
-					for _, genApp := range genApps {
-						apps = append(apps, genApp)
-					}
-				}
-			}
-
-			fmt.Printf("%v\n", apps)
 		}
 		return nil
 	})
@@ -212,4 +208,109 @@ func applyAppManifestsFromDir(ctx context.Context, kubeClient *kube.Kube, acd *a
 	}
 
 	return nil	
+}
+
+func extractAndApplyAppsFromManifestsYAML(ctx context.Context, path string, kubeClient *kube.Kube, acd *argocd.ArgoCD) (bool, error) {
+	apps, appSets, appProjects, err := kube.ExtractAppsFromYAML(path)
+	if err != nil {
+		return false, fmt.Errorf("extracting apps from yaml: %w", err)
+	}
+
+	if len(appProjects) > 0 {
+		for _, appProject := range appProjects {
+			err2 := kubeClient.ApplyFile(ctx, appProject, acd.Namespace())
+			if err2 != nil {
+				return false, fmt.Errorf("applying app project manifest from %s: %w", appProject, err2)
+			}
+		}
+	}
+
+	if len(appSets) > 0 {
+		for _, appSet := range appSets {
+			genApps, err := acd.GenerateAppsFromAppSets(ctx, appSet)
+			if err != nil {
+				base := filepath.Base(appSet)
+				
+				return false, fmt.Errorf("generating apps from appset %s: %w", base, err)
+			}
+
+			for _, genApp := range genApps {
+				apps = append(apps, genApp)
+			}
+		}
+	}
+
+	if len(apps) == 0 {
+		return false, nil
+	}
+
+	added := false
+	for _, app := range apps {
+		err2 := kubeClient.ApplyFile(ctx, app, acd.Namespace())
+		if err2 != nil {
+			return added, fmt.Errorf("applying app manifest from %s: %w", app, err2)
+		}
+
+		added = true
+	}
+
+	return added, nil
+}
+
+func recursivelyApplyApps(ctx context.Context, kubeClient *kube.Kube, acd *argocd.ArgoCD, numRecursions *int, processedApps *map[string]struct{}) error {
+	*numRecursions++
+	if *numRecursions > MaxRecursions {
+		return fmt.Errorf("max recursions of %d reached", MaxRecursions)
+	}
+
+	added := false
+	appList, err := acd.GetAppList(ctx)
+	if err != nil {
+		return fmt.Errorf("getting app list using argocd: %w", err)
+	}
+
+	for _, appListItem := range appList {
+		app := strings.TrimSpace(appListItem)
+		if app == "" {
+			continue
+		}
+
+		fmt.Fprintf(os.Stdout, "🍓 Scanning application %s (recursion: %d)...\n", app, *numRecursions)
+
+		// check if app has been already processed
+		_, ok := (*processedApps)[app]
+		if ok {
+			continue
+		}
+
+		err := acd.WaitForAppManifests(ctx, app)
+		if err != nil {
+			return fmt.Errorf("waiting for app %s manifests: %w", app, err)
+		}
+
+		manifests, err := acd.GetAppManifests(ctx, app)
+		if err != nil {
+			return fmt.Errorf("getting app %s manifests: %w", app, err)
+		}
+
+		addedApps, err := extractAndApplyAppsFromManifestsYAML(ctx, manifests, kubeClient, acd)
+		if err != nil {
+			return fmt.Errorf("extracting and applying apps from manifests yaml: %w", err)
+		}
+
+		if addedApps {
+			added = true
+		}
+
+		(*processedApps)[app] = struct{}{}
+	}
+
+	if added {
+		err := recursivelyApplyApps(ctx, kubeClient, acd, numRecursions, processedApps)
+		if err != nil {
+			return fmt.Errorf("resursively applying apps (recursion: %d): %w", err)
+		}
+	}
+
+	return nil
 }
