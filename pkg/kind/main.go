@@ -9,18 +9,19 @@ import (
 	"path/filepath"
 
 	"github.com/keenbytes/argocd-apps-preview/pkg/command"
+	"github.com/keenbytes/argocd-apps-preview/pkg/logmsg"
 )
 
 //go:embed cluster.yml
 var clusterConfig []byte
 
 type Kind struct {
-	name string
+	name  string
 	image string
 }
 
 func (k *Kind) Create(ctx context.Context) error {
-	fmt.Fprintf(os.Stdout, "🐳  Creating cluster...\n")
+	logmsg.Info("Creating cluster...")
 
 	config, err := writeEmbeddedYAMLToTemp()
 	if err != nil {
@@ -41,7 +42,7 @@ func (k *Kind) Create(ctx context.Context) error {
 }
 
 func (k *Kind) Delete() error {
-	fmt.Fprintf(os.Stdout, "🧹  Deleting cluster...\n")
+	logmsg.Info("Deleting cluster...")
 
 	ctx := context.Background()
 

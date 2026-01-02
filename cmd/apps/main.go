@@ -3,8 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -12,133 +12,80 @@ import (
 	"github.com/keenbytes/argocd-apps-preview/pkg/argocd"
 	"github.com/keenbytes/argocd-apps-preview/pkg/kind"
 	"github.com/keenbytes/argocd-apps-preview/pkg/kube"
-)
-
-const (
-	LogLevelNone = 1 << iota
-	LogLevelSteps
-	LogLevelCommands
-	LogLevelStdoutStderr
-)
-
-const (
-	KindName        = "argocd-app-prev"
-	KindImage       = "kindest/node:v1.33.4"
-	ArgoCDNamespace = "tools"
-	ArgoCDVersion   = "v2.14.11"
-	DirManifests    = "manifests"
-	DirSecrets      = "secrets"
-	ArgoCDNodePort  = 30443
-	MaxRecursions   = 7
-)
-
-const (
-	ExitKindNotFound                  = 101
-	ExitArgoCDNotFound                = 102
-	ExitKubectlNotFound               = 103
-	ExitCreatingClusterFailed         = 201
-	ExitDeletingClusterFailed         = 202
-	ExitArgoCDInstallationFailed      = 301
-	ExitArgoCDPortForwardFailed       = 302
-	ExitArgoCDLoggingFailed           = 303
-	ExitApplyingSecretsFailed         = 304
-	ExitApplyingManifestsFailed       = 305
-	ExitRecursivelyApplyingAppsFailed = 306
+	"github.com/keenbytes/argocd-apps-preview/pkg/logmsg"
 )
 
 func main() {
-	// 09. recursively scan and apply applications
-	// 10. dump applications from argocd
 	checkPrerequisites()
+	checkManifestsDir()
+	checkOutputsDir()
 
 	cluster := kind.NewKind(KindName, KindImage)
 	_ = cluster.Delete()
 
-	ctxCluster, cancelCluster := context.WithTimeout(context.Background(), 120*time.Second)
+	ctxCluster, cancelCluster := context.WithTimeout(context.Background(), CtxClusterTimeoutSeconds*time.Second)
 	defer cancelCluster()
 
 	err := cluster.Create(ctxCluster)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌  Error creating kind cluster: %s\n", err.Error())
-		cluster.Delete()
+		logmsg.Error(ErrMsgCreatingClusterFailed, err)
+		_ = cluster.Delete()
 		os.Exit(ExitCreatingClusterFailed)
 	}
+	defer cluster.Delete()
 
 	kubeClient := kube.NewKube(getKubeContext())
 
 	acd := argocd.NewArgoCD(kubeClient, ArgoCDNamespace, ArgoCDVersion, ArgoCDNodePort)
 
-	ctxArgoCD, cancelArgoCD := context.WithTimeout(context.Background(), 360*time.Second)
+	ctxArgoCD, cancelArgoCD := context.WithTimeout(context.Background(), CtxArgoCDTimeoutSeconds*time.Second)
 	defer cancelArgoCD()
 
 	err = acd.Install(ctxArgoCD)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌  Error installing argocd: %s\n", err.Error())
-		cluster.Delete()
+		logmsg.Error(ErrMsgArgoCDInstallationFailed, err)
 		os.Exit(ExitArgoCDInstallationFailed)
 	}
 
-	time.Sleep(4 * time.Second)
+	time.Sleep(SleepSecondsAfterArgoCDInstall * time.Second)
 
 	err = acd.Login(ctxArgoCD)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌  Error logging into argocd: %s\n", err.Error())
-		cluster.Delete()
+		logmsg.Error(ErrMsgArgoCDLoggingFailed, err)
 		os.Exit(ExitArgoCDLoggingFailed)
 	}
 
 	err = applyManifests(ctxArgoCD, kubeClient, DirSecrets, ArgoCDNamespace)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌  Error applying files from secrets directory: %s\n", err.Error())
-		cluster.Delete()
+		logmsg.Error(ErrMsgApplyingSecretsFailed, err)
 		os.Exit(ExitApplyingSecretsFailed)
 	}
 
 	err = applyAppManifestsFromDir(ctxArgoCD, kubeClient, acd, DirManifests)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌  Error applying applications from manifests directory: %s\n", err.Error())
-		cluster.Delete()
+		logmsg.Error(ErrMsgApplyingManifestsFailed, err)
 		os.Exit(ExitApplyingManifestsFailed)
 	}
 
 	ctxRecursiveApply, cancelRecursiveApply := context.WithTimeout(context.Background(), 360*time.Second)
 	defer cancelRecursiveApply()
 
-	fmt.Fprintf(os.Stdout, "🍓 Starting to recursively apply applications...\n")
+	logmsg.Info("Starting to recursively apply applications...")
 	numRecursions := 0
 	processedApps := map[string]struct{}{}
 	err = recursivelyApplyApps(ctxRecursiveApply, kubeClient, acd, &numRecursions, &processedApps)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌  Error recursively applying applications: %s\n", err.Error())
-		cluster.Delete()
+		logmsg.Error(ErrMsgRecursivelyApplyingAppsFailed, err)
 		os.Exit(ExitRecursivelyApplyingAppsFailed)
 	}
-	fmt.Fprintf(os.Stdout, "🍓 Finished recursively applying applications.\n")
+	logmsg.Info("Finished recursively applying applications.")
 
-	//cluster.Delete()
-	os.Exit(0)
-}
-
-func checkPrerequisites() {
-	fmt.Fprintf(os.Stdout, "🔎  Checking prerequisites...\n")
-
-	_, err := exec.LookPath("kind")
+	err = dumpAppManifests(ctxArgoCD, acd, DirOutputs)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌  kind not found\n")
-		os.Exit(ExitKindNotFound)
+		logmsg.Error(ErrMsgDumpingAppManifestsFailed, err)
+		os.Exit(ExitDumpingAppManifestsFailed)
 	}
-
-	_, err = exec.LookPath("argocd")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌  argocd-cli not found\n")
-		os.Exit(ExitArgoCDNotFound)
-	}
-
-	_, err = exec.LookPath("kubectl")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌  kubectl not found\n")
-		os.Exit(ExitKubectlNotFound)
-	}
+	logmsg.Info(fmt.Sprintf("Finished dumping app manifests to %s directory.", DirOutputs))
 }
 
 func getKubeContext() string {
@@ -284,7 +231,7 @@ func recursivelyApplyApps(ctx context.Context, kubeClient *kube.Kube, acd *argoc
 			continue
 		}
 
-		fmt.Fprintf(os.Stdout, "🔎  Scanning application %s (recursion: %d)...\n", app, *numRecursions)
+		logmsg.Info(fmt.Sprintf("Scanning application %s (recursion: %d)...", app, *numRecursions))
 
 		// check if app has been already processed
 		_, ok := (*processedApps)[app]
@@ -317,9 +264,93 @@ func recursivelyApplyApps(ctx context.Context, kubeClient *kube.Kube, acd *argoc
 	if added {
 		err := recursivelyApplyApps(ctx, kubeClient, acd, numRecursions, processedApps)
 		if err != nil {
-			return fmt.Errorf("resursively applying apps (recursion: %d): %w", *numRecursions, err)
+			return fmt.Errorf("recursively applying apps (recursion: %d): %w", *numRecursions, err)
 		}
 	}
 
+	return nil
+}
+
+func dumpAppManifests(ctx context.Context, acd *argocd.ArgoCD, dir string) error {
+	info, err := os.Stat(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("output directory %s does not exist", dir)
+		}
+		return fmt.Errorf("getting stat for directory %s: %w", dir, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s exists but is not a directory", dir)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return fmt.Errorf("reading output directory %s: %w", dir, err)
+	}
+	if len(entries) > 0 {
+		return fmt.Errorf("output directory %s is not empty", dir)
+	}
+
+	appList, err := acd.GetAppList(ctx)
+	if err != nil {
+		return fmt.Errorf("getting app list using argocd: %w", err)
+	}
+
+	for _, appListItem := range appList {
+		app := strings.TrimSpace(appListItem)
+		if app == "" {
+			continue
+		}
+
+		err := acd.WaitForAppManifests(ctx, app)
+		if err != nil {
+			return fmt.Errorf("waiting for app %s manifests: %w", app, err)
+		}
+
+		manifestsFile, err := acd.GetAppManifests(ctx, app)
+		if err != nil {
+			return fmt.Errorf("getting app %s manifests: %w", app, err)
+		}
+
+		outputFilename := strings.ReplaceAll(app, "/", "__")
+
+		// copy manifestsFile to dir/outputFilename.yaml
+		srcFile, err := os.Open(manifestsFile)
+		if err != nil {
+			return fmt.Errorf("opening app manifests file %s: %w", manifestsFile, err)
+		}
+		defer func() {
+			err := srcFile.Close()
+			if err != nil {
+				logmsg.Error("error closing app manifests file "+manifestsFile, err)
+			}
+		}()
+
+		dstPath := filepath.Join(dir, outputFilename+".yaml")
+		dstFile, err := os.Create(dstPath)
+		if err != nil {
+			err2 := srcFile.Close()
+			if err2 != nil {
+				return fmt.Errorf("closing manifests file %s: %w", dstPath, err2)
+			}
+			return fmt.Errorf("creating dump manifests file %s: %w", dstPath, err)
+		}
+		defer func() {
+			err := dstFile.Close()
+			if err != nil {
+				logmsg.Error("error closing dump manifests file "+manifestsFile, err)
+			}
+		}()
+
+		_, err = io.Copy(dstFile, srcFile)
+		if err != nil {
+			return fmt.Errorf("copying file from %s to %s: %w", manifestsFile, dstPath, err)
+		}
+
+		err = dstFile.Sync()
+		if err != nil {
+			return fmt.Errorf("writing app %s manifests to file: %w", app, err)
+		}
+	}
 	return nil
 }

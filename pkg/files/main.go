@@ -6,10 +6,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+
+	"github.com/keenbytes/argocd-apps-preview/pkg/logmsg"
 )
 
 func DownloadFile(url string) (string, error) {
-	fmt.Fprintf(os.Stdout, "📥  Downloading %s...\n", url)
+	logmsg.Info(fmt.Sprintf("Downloading %s...", url))
 
 	tmpDir, err := os.MkdirTemp("", "download-*")
 	if err != nil {
@@ -43,6 +45,7 @@ func DownloadFile(url string) (string, error) {
 		return "", fmt.Errorf("writing to file: %w", err)
 	}
 
-	fmt.Fprintf(os.Stdout, "💾  File saved to %s.\n", destPath)
+	logmsg.Info(fmt.Sprintf("File saved to %s.", destPath))
+	
 	return destPath, nil
 }

@@ -14,20 +14,21 @@ import (
 	"github.com/keenbytes/argocd-apps-preview/pkg/command"
 	"github.com/keenbytes/argocd-apps-preview/pkg/files"
 	"github.com/keenbytes/argocd-apps-preview/pkg/kube"
+	"github.com/keenbytes/argocd-apps-preview/pkg/logmsg"
 	"gopkg.in/yaml.v3"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 type ArgoCD struct {
 	kubeClient *kube.Kube
-	namespace string
-	started bool
-	version string
-	nodePort int
+	namespace  string
+	started    bool
+	version    string
+	nodePort   int
 }
 
 func (a *ArgoCD) Install(ctx context.Context) error {
-	fmt.Fprintf(os.Stdout, "🐙  Creating namespace %s...\n", a.namespace)
+	logmsg.Info(fmt.Sprintf("Creating namespace %s...", a.namespace))
 
 	err := a.kubeClient.CreateNamespace(ctx, a.namespace)
 	if err != nil {
@@ -45,7 +46,7 @@ func (a *ArgoCD) Install(ctx context.Context) error {
 		return fmt.Errorf("updating argocd manifest: %w", err)
 	}
 
-	fmt.Fprintf(os.Stdout, "🐙  Installing ArgoCD...\n")
+	logmsg.Info("Installing ArgoCD...")
 	err = a.kubeClient.ApplyFile(ctx, installYaml, a.namespace)
 	if err != nil {
 		return fmt.Errorf("applying argocd manifest: %w", err)
@@ -60,7 +61,7 @@ func (a *ArgoCD) Install(ctx context.Context) error {
 }
 
 func (a *ArgoCD) Login(ctx context.Context) error {
-	fmt.Fprintf(os.Stdout, "🐙  Logging in to ArgoCD...\n")
+	logmsg.Info("Logging in to ArgoCD...")
 
 	cmd, err := command.NewCommand("kubectl", "get", "secret", "-n", a.namespace, "argocd-initial-admin-secret", "-o", `jsonpath={.data.password}`)
 	if err != nil {
@@ -96,7 +97,7 @@ func (a *ArgoCD) Login(ctx context.Context) error {
 }
 
 func (a *ArgoCD) Logout(ctx context.Context) error {
-	fmt.Fprintf(os.Stdout, "🐙  Logging out from ArgoCD...\n")
+	logmsg.Info("Logging out from ArgoCD...")
 
 	cmd, err := command.NewCommand("argocd", "logout")
 	if err != nil {
@@ -202,10 +203,10 @@ func (a *ArgoCD) Namespace() string {
 
 func NewArgoCD(kubeClient *kube.Kube, namespace string, version string, nodePort int) *ArgoCD {
 	argocd := &ArgoCD{
-		namespace: namespace,
+		namespace:  namespace,
 		kubeClient: kubeClient,
-		version: version,
-		nodePort: nodePort,
+		version:    version,
+		nodePort:   nodePort,
 	}
 
 	return argocd
@@ -320,7 +321,7 @@ func patchCmdParamsCm(obj *unstructured.Unstructured) error {
 		return nil
 	}
 
-	fmt.Fprintf(os.Stdout, "✨  Patching cmd-params-cm to allow all namespaces...\n")
+	logmsg.Info("Patching cmd-params-cm to allow all namespaces...")
 
 	data, _, err := unstructured.NestedStringMap(obj.Object, "data")
 	if err != nil {
@@ -343,7 +344,7 @@ func patchClusterRoleBinding(u *unstructured.Unstructured, namespace string) err
 		return nil
 	}
 
-	fmt.Fprintf(os.Stdout, "✨  Patching ClusterRole with namespace %s...\n", namespace)
+	logmsg.Info(fmt.Sprintf("Patching ClusterRole with namespace %s...", namespace))
 
 	subjects, found, err := unstructured.NestedSlice(u.Object, "subjects")
 	if err != nil {
@@ -373,7 +374,7 @@ func patchServerService(u *unstructured.Unstructured, nodePort int) error {
 		return nil
 	}
 
-	fmt.Fprintf(os.Stdout, "✨  Patching argocd-server service to NodePort...\n")
+	logmsg.Info("Patching argocd-server service to NodePort...")
 
 	if err := unstructured.SetNestedField(u.Object, "NodePort", "spec", "type"); err != nil {
 		return fmt.Errorf("setting spec.type: %w", err)
@@ -381,10 +382,10 @@ func patchServerService(u *unstructured.Unstructured, nodePort int) error {
 
 	buildPort := func(name string, port, targetPort, nodePort int) map[string]interface{} {
 		return map[string]interface{}{
-			"name":        name,
-			"port":        int64(port),
-			"targetPort":  int64(targetPort),
-			"nodePort":    int64(nodePort),
+			"name":       name,
+			"port":       int64(port),
+			"targetPort": int64(targetPort),
+			"nodePort":   int64(nodePort),
 		}
 	}
 
