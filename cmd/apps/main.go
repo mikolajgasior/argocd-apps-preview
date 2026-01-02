@@ -16,10 +16,12 @@ import (
 )
 
 func main() {
+	// check required software and necessary local directories
 	checkPrerequisites()
 	checkManifestsDir()
 	checkOutputsDir()
 
+	// start kind cluster
 	cluster := kind.NewKind(KindName, KindImage)
 	_ = cluster.Delete()
 
@@ -34,10 +36,13 @@ func main() {
 	}
 	defer cluster.Delete()
 
+	// get kube client
 	kubeClient := kube.NewKube(getKubeContext())
 
+	// install argocd on the kind cluster
 	acd := argocd.NewArgoCD(kubeClient, ArgoCDNamespace, ArgoCDVersion, ArgoCDNodePort)
 
+	// add timeout to context for argocd installation
 	ctxArgoCD, cancelArgoCD := context.WithTimeout(context.Background(), CtxArgoCDTimeoutSeconds*time.Second)
 	defer cancelArgoCD()
 
@@ -47,29 +52,35 @@ func main() {
 		os.Exit(ExitArgoCDInstallationFailed)
 	}
 
+	// wait a while until argocd starts up
 	time.Sleep(SleepSecondsAfterArgoCDInstall * time.Second)
 
+	// log in to argocd
 	err = acd.Login(ctxArgoCD)
 	if err != nil {
 		logmsg.Error(ErrMsgArgoCDLoggingFailed, err)
 		os.Exit(ExitArgoCDLoggingFailed)
 	}
 
+	// apply manifests from the secrets (to allow argocd pull from private repositories etc.)
 	err = applyManifests(ctxArgoCD, kubeClient, DirSecrets, ArgoCDNamespace)
 	if err != nil {
 		logmsg.Error(ErrMsgApplyingSecretsFailed, err)
 		os.Exit(ExitApplyingSecretsFailed)
 	}
 
+	// apply initial manifests (we need to start somewhere)
 	err = applyAppManifestsFromDir(ctxArgoCD, kubeClient, acd, DirManifests)
 	if err != nil {
 		logmsg.Error(ErrMsgApplyingManifestsFailed, err)
 		os.Exit(ExitApplyingManifestsFailed)
 	}
 
+	// add timeout to context for getting the applications recursively
 	ctxRecursiveApply, cancelRecursiveApply := context.WithTimeout(context.Background(), 360*time.Second)
 	defer cancelRecursiveApply()
 
+	// process argocd applications recursively
 	logmsg.Info("Starting to recursively apply applications...")
 	numRecursions := 0
 	processedApps := map[string]struct{}{}
@@ -80,6 +91,7 @@ func main() {
 	}
 	logmsg.Info("Finished recursively applying applications.")
 
+	// dump app manifests to the outputs directory
 	err = dumpAppManifests(ctxArgoCD, acd, DirOutputs)
 	if err != nil {
 		logmsg.Error(ErrMsgDumpingAppManifestsFailed, err)
