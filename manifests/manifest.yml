@@ -2,14 +2,14 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: root
+  name: stage0
   namespace: tools
 spec:
   project: default
   source:
     repoURL: https://github.com/keenbytes/apps-of-apps-example
     targetRevision: HEAD
-    path: app/root
+    path: stage0-app
   destination:
     server: https://kubernetes.default.svc
     namespace: argocd

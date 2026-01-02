@@ -20,7 +20,7 @@ type Kind struct {
 }
 
 func (k *Kind) Create(ctx context.Context) error {
-	fmt.Fprintf(os.Stdout, "🍓 Creating cluster...\n")
+	fmt.Fprintf(os.Stdout, "🐳  Creating cluster...\n")
 
 	config, err := writeEmbeddedYAMLToTemp()
 	if err != nil {
@@ -41,7 +41,7 @@ func (k *Kind) Create(ctx context.Context) error {
 }
 
 func (k *Kind) Delete() error {
-	fmt.Fprintf(os.Stdout, "🍓 Deleting cluster...\n")
+	fmt.Fprintf(os.Stdout, "🧹  Deleting cluster...\n")
 
 	ctx := context.Background()
 

@@ -145,6 +145,8 @@ f, err := os.Open(path)
 		appNamespace := u.GetNamespace()
 		
 		if kind == "Application" {
+			fmt.Fprintf(os.Stdout, "✨  Disabling auto-sync and adding namespace creation to application %s/%s...\n", appNamespace, appName)
+
 			_ = RemoveNestedField(u, "spec", "syncPolicy", "automated")
 
 			const optKey = "CreateNamespace=true"

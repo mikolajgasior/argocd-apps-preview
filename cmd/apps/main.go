@@ -15,27 +15,34 @@ import (
 )
 
 const (
-	KindName = "argocd-app-prev"
-	KindImage = "kindest/node:v1.33.4"
-	ArgoCDNamespace = "tools"
-	ArgoCDVersion = "v2.14.11"
-	DirManifests = "manifests"
-	DirSecrets = "secrets"
-	ArgoCDNodePort = 30443
-	MaxRecursions = 6
+	LogLevelNone = 1 << iota
+	LogLevelSteps
+	LogLevelCommands
+	LogLevelStdoutStderr
 )
 
 const (
-	ExitKindNotFound = 101
-	ExitArgoCDNotFound = 102
-	ExitKubectlNotFound = 103
-	ExitCreatingClusterFailed = 201
-	ExitDeletingClusterFailed = 202
-	ExitArgoCDInstallationFailed = 301
-	ExitArgoCDPortForwardFailed = 302
-	ExitArgoCDLoggingFailed = 303
-	ExitApplyingSecretsFailed = 304
-	ExitApplyingManifestsFailed = 305
+	KindName        = "argocd-app-prev"
+	KindImage       = "kindest/node:v1.33.4"
+	ArgoCDNamespace = "tools"
+	ArgoCDVersion   = "v2.14.11"
+	DirManifests    = "manifests"
+	DirSecrets      = "secrets"
+	ArgoCDNodePort  = 30443
+	MaxRecursions   = 7
+)
+
+const (
+	ExitKindNotFound                  = 101
+	ExitArgoCDNotFound                = 102
+	ExitKubectlNotFound               = 103
+	ExitCreatingClusterFailed         = 201
+	ExitDeletingClusterFailed         = 202
+	ExitArgoCDInstallationFailed      = 301
+	ExitArgoCDPortForwardFailed       = 302
+	ExitArgoCDLoggingFailed           = 303
+	ExitApplyingSecretsFailed         = 304
+	ExitApplyingManifestsFailed       = 305
 	ExitRecursivelyApplyingAppsFailed = 306
 )
 
@@ -47,12 +54,12 @@ func main() {
 	cluster := kind.NewKind(KindName, KindImage)
 	_ = cluster.Delete()
 
-	ctxCluster, cancelCluster := context.WithTimeout(context.Background(), 120 * time.Second)
+	ctxCluster, cancelCluster := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancelCluster()
 
 	err := cluster.Create(ctxCluster)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Error creating kind cluster: %s", err.Error())
+		fmt.Fprintf(os.Stderr, "❌  Error creating kind cluster: %s\n", err.Error())
 		cluster.Delete()
 		os.Exit(ExitCreatingClusterFailed)
 	}
@@ -61,12 +68,12 @@ func main() {
 
 	acd := argocd.NewArgoCD(kubeClient, ArgoCDNamespace, ArgoCDVersion, ArgoCDNodePort)
 
-	ctxArgoCD, cancelArgoCD := context.WithTimeout(context.Background(), 360 * time.Second)
+	ctxArgoCD, cancelArgoCD := context.WithTimeout(context.Background(), 360*time.Second)
 	defer cancelArgoCD()
 
 	err = acd.Install(ctxArgoCD)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Error installing argocd: %s", err.Error())
+		fmt.Fprintf(os.Stderr, "❌  Error installing argocd: %s\n", err.Error())
 		cluster.Delete()
 		os.Exit(ExitArgoCDInstallationFailed)
 	}
@@ -75,59 +82,61 @@ func main() {
 
 	err = acd.Login(ctxArgoCD)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Error logging into argocd: %s", err.Error())
+		fmt.Fprintf(os.Stderr, "❌  Error logging into argocd: %s\n", err.Error())
 		cluster.Delete()
 		os.Exit(ExitArgoCDLoggingFailed)
 	}
 
 	err = applyManifests(ctxArgoCD, kubeClient, DirSecrets, ArgoCDNamespace)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Error applying files from secrets directory: %s", err.Error())
+		fmt.Fprintf(os.Stderr, "❌  Error applying files from secrets directory: %s\n", err.Error())
 		cluster.Delete()
 		os.Exit(ExitApplyingSecretsFailed)
 	}
 
 	err = applyAppManifestsFromDir(ctxArgoCD, kubeClient, acd, DirManifests)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Error applying applications from manifests directory: %s", err.Error())
+		fmt.Fprintf(os.Stderr, "❌  Error applying applications from manifests directory: %s\n", err.Error())
 		cluster.Delete()
 		os.Exit(ExitApplyingManifestsFailed)
 	}
 
-	ctxRecursiveApply, cancelRecursiveApply := context.WithTimeout(context.Background(), 360 * time.Second)
+	ctxRecursiveApply, cancelRecursiveApply := context.WithTimeout(context.Background(), 360*time.Second)
 	defer cancelRecursiveApply()
 
+	fmt.Fprintf(os.Stdout, "🍓 Starting to recursively apply applications...\n")
 	numRecursions := 0
 	processedApps := map[string]struct{}{}
 	err = recursivelyApplyApps(ctxRecursiveApply, kubeClient, acd, &numRecursions, &processedApps)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Error recursively applying applications: %s", err.Error())
+		fmt.Fprintf(os.Stderr, "❌  Error recursively applying applications: %s\n", err.Error())
 		cluster.Delete()
 		os.Exit(ExitRecursivelyApplyingAppsFailed)
 	}
+	fmt.Fprintf(os.Stdout, "🍓 Finished recursively applying applications.\n")
 
 	//cluster.Delete()
 	os.Exit(0)
 }
 
 func checkPrerequisites() {
-	fmt.Fprintf(os.Stdout, "🍓 Checking prerequisites...\n")
+	fmt.Fprintf(os.Stdout, "🔎  Checking prerequisites...\n")
 
 	_, err := exec.LookPath("kind")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ kind not found")
+		fmt.Fprintf(os.Stderr, "❌  kind not found\n")
 		os.Exit(ExitKindNotFound)
 	}
 
 	_, err = exec.LookPath("argocd")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ argocd-cli not found")
+		fmt.Fprintf(os.Stderr, "❌  argocd-cli not found\n")
 		os.Exit(ExitArgoCDNotFound)
 	}
 
 	_, err = exec.LookPath("kubectl")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ kubectl not found")
+		fmt.Fprintf(os.Stderr, "❌  kubectl not found\n")
 		os.Exit(ExitKubectlNotFound)
 	}
 }
@@ -170,7 +179,7 @@ func applyManifests(ctx context.Context, kubeClient *kube.Kube, dir string, name
 		return fmt.Errorf("walking directory %s: %v", dir, err)
 	}
 
-	return nil	
+	return nil
 }
 
 func applyAppManifestsFromDir(ctx context.Context, kubeClient *kube.Kube, acd *argocd.ArgoCD, dir string) error {
@@ -207,7 +216,7 @@ func applyAppManifestsFromDir(ctx context.Context, kubeClient *kube.Kube, acd *a
 		return fmt.Errorf("walking directory %s: %v", dir, err)
 	}
 
-	return nil	
+	return nil
 }
 
 func extractAndApplyAppsFromManifestsYAML(ctx context.Context, path string, kubeClient *kube.Kube, acd *argocd.ArgoCD) (bool, error) {
@@ -230,7 +239,7 @@ func extractAndApplyAppsFromManifestsYAML(ctx context.Context, path string, kube
 			genApps, err := acd.GenerateAppsFromAppSets(ctx, appSet)
 			if err != nil {
 				base := filepath.Base(appSet)
-				
+
 				return false, fmt.Errorf("generating apps from appset %s: %w", base, err)
 			}
 
@@ -275,7 +284,7 @@ func recursivelyApplyApps(ctx context.Context, kubeClient *kube.Kube, acd *argoc
 			continue
 		}
 
-		fmt.Fprintf(os.Stdout, "🍓 Scanning application %s (recursion: %d)...\n", app, *numRecursions)
+		fmt.Fprintf(os.Stdout, "🔎  Scanning application %s (recursion: %d)...\n", app, *numRecursions)
 
 		// check if app has been already processed
 		_, ok := (*processedApps)[app]
@@ -308,7 +317,7 @@ func recursivelyApplyApps(ctx context.Context, kubeClient *kube.Kube, acd *argoc
 	if added {
 		err := recursivelyApplyApps(ctx, kubeClient, acd, numRecursions, processedApps)
 		if err != nil {
-			return fmt.Errorf("resursively applying apps (recursion: %d): %w", err)
+			return fmt.Errorf("resursively applying apps (recursion: %d): %w", *numRecursions, err)
 		}
 	}
 

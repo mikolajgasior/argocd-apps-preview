@@ -9,6 +9,8 @@ import (
 )
 
 func DownloadFile(url string) (string, error) {
+	fmt.Fprintf(os.Stdout, "📥  Downloading %s...\n", url)
+
 	tmpDir, err := os.MkdirTemp("", "download-*")
 	if err != nil {
 		return "", fmt.Errorf("creating temp dir: %w", err)
@@ -41,5 +43,6 @@ func DownloadFile(url string) (string, error) {
 		return "", fmt.Errorf("writing to file: %w", err)
 	}
 
+	fmt.Fprintf(os.Stdout, "💾  File saved to %s.\n", destPath)
 	return destPath, nil
 }

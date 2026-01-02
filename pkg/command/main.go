@@ -35,6 +35,9 @@ type Command struct {
 	stdout *os.File
 	stderr *os.File
 	waitGroup *sync.WaitGroup
+	printStdout bool
+	printStderr bool
+	indent int
 }
 
 func (c *Command) Stdout() *os.File {
@@ -57,13 +60,28 @@ func NewCommand(name string, args ...string) (*Command, error) {
 		args: args,
 		stdout: stdout,
 		stderr: stderr,
+		printStdout: false,
+		printStderr: false,
+		indent: 0,
 	}
 
 	return command, nil
 }
 
+func (c *Command) SetPrintStdout(bool) {
+	c.printStdout = true
+}
+
+func (c *Command) SetPrintStderr(bool) {
+	c.printStderr = true
+}
+
+func (c *Command) Indent(in int) {
+	c.indent = in
+}
+
 func (c *Command) Run(ctx context.Context, env *map[string]string) error {
-	fmt.Fprintf(os.Stdout, "🍓 Running command: %s %s\n", c.name, strings.Join(c.args, " "))
+	fmt.Fprintf(os.Stdout, "%s$ %s %s\n", strings.Repeat(" ", c.indent), c.name, strings.Join(c.args, " "))
 
 	cmd := exec.CommandContext(ctx, c.name, c.args...)
 
@@ -86,6 +104,14 @@ func (c *Command) Run(ctx context.Context, env *map[string]string) error {
 
 	if err := cmd.Wait(); err != nil {
 		if exiterr, ok := err.(*exec.ExitError); ok {
+			stderrContents, _ := os.ReadFile(c.stderr.Name())
+			fmt.Fprintf(os.Stderr, "💥💥💥💥💥 stderr begin\n")
+			fmt.Fprint(os.Stderr, string(stderrContents)+"💥💥💥💥💥 stderr end\n")
+
+			stdoutContents, _ := os.ReadFile(c.stdout.Name())
+			fmt.Fprintf(os.Stderr, "💥💥💥💥💥 stdout begin\n")
+			fmt.Fprint(os.Stderr, string(stdoutContents)+"💥💥💥💥💥 stdout end\n")
+
 			return fmt.Errorf("%w: %s", ErrCommandReturnsNonZeroExitCode, exiterr)
 		}
 		
@@ -113,25 +139,45 @@ func (c *Command) createWaitGroup(cmd *exec.Cmd) error {
 		return fmt.Errorf("%w: %w", ErrPipingStderr, err)
 	}
 
-	go func() {
-		scanner := bufio.NewScanner(cmdStdoutReader)
-		var writer io.Writer
-		writer = io.MultiWriter(c.stdout, os.Stdout)
-		for scanner.Scan() {
-			fmt.Fprintln(writer, scanner.Text())
-		}
-		c.waitGroup.Done()
-	}()
+	if c.printStdout {
+		go func() {
+			scanner := bufio.NewScanner(cmdStdoutReader)
+			var writer io.Writer
+			writer = io.MultiWriter(c.stdout, os.Stdout)
+			for scanner.Scan() {
+				fmt.Fprintln(writer, scanner.Text())
+			}
+			c.waitGroup.Done()
+		}()
+	} else {
+		go func() {
+			scanner := bufio.NewScanner(cmdStdoutReader)
+			for scanner.Scan() {
+				fmt.Fprintln(c.stdout, scanner.Text())
+			}
+			c.waitGroup.Done()
+		}()
+	}
 
-	go func() {
-		scanner := bufio.NewScanner(cmdStderrReader)
-		var writer io.Writer
-		writer = io.MultiWriter(c.stderr, os.Stderr)
-		for scanner.Scan() {
-			fmt.Fprintln(writer, scanner.Text())
-		}
-		c.waitGroup.Done()
-	}()
+	if c.printStderr {
+		go func() {
+			scanner := bufio.NewScanner(cmdStderrReader)
+			var writer io.Writer
+			writer = io.MultiWriter(c.stderr, os.Stderr)
+			for scanner.Scan() {
+				fmt.Fprintln(writer, scanner.Text())
+			}
+			c.waitGroup.Done()
+		}()
+	} else {
+		go func() {
+			scanner := bufio.NewScanner(cmdStderrReader)
+			for scanner.Scan() {
+				fmt.Fprintln(c.stderr, scanner.Text())
+			}
+			c.waitGroup.Done()
+		}()
+	}
 
 	return nil
 }

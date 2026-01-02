@@ -27,7 +27,7 @@ type ArgoCD struct {
 }
 
 func (a *ArgoCD) Install(ctx context.Context) error {
-	fmt.Fprintf(os.Stdout, "🍓 Creating namespace %s...\n", a.namespace)
+	fmt.Fprintf(os.Stdout, "🐙  Creating namespace %s...\n", a.namespace)
 
 	err := a.kubeClient.CreateNamespace(ctx, a.namespace)
 	if err != nil {
@@ -45,6 +45,7 @@ func (a *ArgoCD) Install(ctx context.Context) error {
 		return fmt.Errorf("updating argocd manifest: %w", err)
 	}
 
+	fmt.Fprintf(os.Stdout, "🐙  Installing ArgoCD...\n")
 	err = a.kubeClient.ApplyFile(ctx, installYaml, a.namespace)
 	if err != nil {
 		return fmt.Errorf("applying argocd manifest: %w", err)
@@ -59,7 +60,7 @@ func (a *ArgoCD) Install(ctx context.Context) error {
 }
 
 func (a *ArgoCD) Login(ctx context.Context) error {
-	fmt.Fprintf(os.Stdout, "🍓 Logging in to ArgoCD...\n")
+	fmt.Fprintf(os.Stdout, "🐙  Logging in to ArgoCD...\n")
 
 	cmd, err := command.NewCommand("kubectl", "get", "secret", "-n", a.namespace, "argocd-initial-admin-secret", "-o", `jsonpath={.data.password}`)
 	if err != nil {
@@ -95,7 +96,7 @@ func (a *ArgoCD) Login(ctx context.Context) error {
 }
 
 func (a *ArgoCD) Logout(ctx context.Context) error {
-	fmt.Fprintf(os.Stdout, "🍓 Logging out from ArgoCD...\n")
+	fmt.Fprintf(os.Stdout, "🐙  Logging out from ArgoCD...\n")
 
 	cmd, err := command.NewCommand("argocd", "logout")
 	if err != nil {
@@ -319,6 +320,8 @@ func patchCmdParamsCm(obj *unstructured.Unstructured) error {
 		return nil
 	}
 
+	fmt.Fprintf(os.Stdout, "✨  Patching cmd-params-cm to allow all namespaces...\n")
+
 	data, _, err := unstructured.NestedStringMap(obj.Object, "data")
 	if err != nil {
 		return fmt.Errorf("reading .data: %w", err)
@@ -339,6 +342,8 @@ func patchClusterRoleBinding(u *unstructured.Unstructured, namespace string) err
 	if u.GetKind() != "ClusterRoleBinding" || (u.GetName() != "argocd-application-controller" && u.GetName() != "argocd-applicationset-controller" && u.GetName() != "argocd-server") {
 		return nil
 	}
+
+	fmt.Fprintf(os.Stdout, "✨  Patching ClusterRole with namespace %s...\n", namespace)
 
 	subjects, found, err := unstructured.NestedSlice(u.Object, "subjects")
 	if err != nil {
@@ -367,6 +372,8 @@ func patchServerService(u *unstructured.Unstructured, nodePort int) error {
 	if u.GetKind() != "Service" || u.GetName() != "argocd-server" {
 		return nil
 	}
+
+	fmt.Fprintf(os.Stdout, "✨  Patching argocd-server service to NodePort...\n")
 
 	if err := unstructured.SetNestedField(u.Object, "NodePort", "spec", "type"); err != nil {
 		return fmt.Errorf("setting spec.type: %w", err)

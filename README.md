@@ -1,2 +1,2 @@
 # argocd-apps-preview
-A lightweight ArgoCD utility that generates preview for every “app‑of‑apps” application, and computes diffs between two sets of manifests.
+A lightweight ArgoCD utility that generates a preview for every “app‑of‑apps” application, and computes diffs between two sets of manifests.
