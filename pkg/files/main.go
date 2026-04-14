@@ -7,7 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/keenbytes/argocd-apps-preview/pkg/logmsg"
+	"github.com/mikolajgasior/argocd-apps-preview/pkg/logmsg"
 )
 
 func DownloadFile(url string) (string, error) {
@@ -46,6 +46,6 @@ func DownloadFile(url string) (string, error) {
 	}
 
 	logmsg.Info(fmt.Sprintf("File saved to %s.", destPath))
-	
+
 	return destPath, nil
 }

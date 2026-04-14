@@ -5,7 +5,7 @@ import (
 	"os"
 	"os/exec"
 
-	"github.com/keenbytes/argocd-apps-preview/pkg/logmsg"
+	"github.com/mikolajgasior/argocd-apps-preview/pkg/logmsg"
 )
 
 func checkPrerequisites() {

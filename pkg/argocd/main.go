@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/keenbytes/argocd-apps-preview/pkg/command"
-	"github.com/keenbytes/argocd-apps-preview/pkg/files"
-	"github.com/keenbytes/argocd-apps-preview/pkg/kube"
-	"github.com/keenbytes/argocd-apps-preview/pkg/logmsg"
+	"github.com/mikolajgasior/argocd-apps-preview/pkg/command"
+	"github.com/mikolajgasior/argocd-apps-preview/pkg/files"
+	"github.com/mikolajgasior/argocd-apps-preview/pkg/kube"
+	"github.com/mikolajgasior/argocd-apps-preview/pkg/logmsg"
 	"gopkg.in/yaml.v3"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )

@@ -8,5 +8,6 @@ const (
 	DirManifests    = "manifests"
 	DirSecrets      = "secrets"
 	DirOutputs      = "outputs"
+	DirHooks        = "hooks"
 	ArgoCDNodePort  = 30443
 )

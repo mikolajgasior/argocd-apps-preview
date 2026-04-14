@@ -8,8 +8,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/keenbytes/argocd-apps-preview/pkg/command"
-	"github.com/keenbytes/argocd-apps-preview/pkg/logmsg"
+	"github.com/mikolajgasior/argocd-apps-preview/pkg/command"
+	"github.com/mikolajgasior/argocd-apps-preview/pkg/logmsg"
 )
 
 //go:embed cluster.yml

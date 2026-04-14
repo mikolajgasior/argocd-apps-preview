@@ -7,7 +7,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/keenbytes/argocd-apps-preview/pkg/command"
+	"github.com/mikolajgasior/argocd-apps-preview/pkg/command"
 	yamlStd "gopkg.in/yaml.v3"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	yamlK8s "sigs.k8s.io/yaml"
@@ -105,7 +105,7 @@ func AppendUniqueString(slice []interface{}, val string) []interface{} {
 }
 
 func ExtractAppsFromYAML(path string) ([]string, []string, []string, error) {
-f, err := os.Open(path)
+	f, err := os.Open(path)
 	if err != nil {
 		panic(err)
 	}
@@ -143,9 +143,9 @@ f, err := os.Open(path)
 
 		appName := u.GetName()
 		appNamespace := u.GetNamespace()
-		
+
 		if kind == "Application" {
-			fmt.Fprintf(os.Stdout, "✨  Disabling auto-sync and adding namespace creation to application %s/%s...\n", appNamespace, appName)
+			fmt.Fprintf(os.Stdout, "* Disabling auto-sync and adding namespace creation to application %s/%s...\n", appNamespace, appName)
 
 			_ = RemoveNestedField(u, "spec", "syncPolicy", "automated")
 

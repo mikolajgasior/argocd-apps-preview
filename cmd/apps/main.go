@@ -9,10 +9,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/keenbytes/argocd-apps-preview/pkg/argocd"
-	"github.com/keenbytes/argocd-apps-preview/pkg/kind"
-	"github.com/keenbytes/argocd-apps-preview/pkg/kube"
-	"github.com/keenbytes/argocd-apps-preview/pkg/logmsg"
+	"github.com/mikolajgasior/argocd-apps-preview/pkg/argocd"
+	"github.com/mikolajgasior/argocd-apps-preview/pkg/command"
+	"github.com/mikolajgasior/argocd-apps-preview/pkg/kind"
+	"github.com/mikolajgasior/argocd-apps-preview/pkg/kube"
+	"github.com/mikolajgasior/argocd-apps-preview/pkg/logmsg"
 )
 
 func main() {
@@ -102,6 +103,30 @@ func main() {
 
 func getKubeContext() string {
 	return fmt.Sprintf("kind-%s", KindName)
+}
+
+func executeHookIfExists(ctx context.Context, hookPath string, envVars map[string]string) error {
+	info, err := os.Stat(hookPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("getting stat for hook file %s: %w", hookPath, err)
+	}
+	if info.IsDir() {
+		return nil
+	}
+
+	logmsg.Info(fmt.Sprintf("Executing hook: %s", hookPath))
+	cmd, err := command.NewCommand("bash", hookPath)
+	if err != nil {
+		return fmt.Errorf("creating command for hook %s: %w", hookPath, err)
+	}
+	err = cmd.Run(ctx, &envVars)
+	if err != nil {
+		return fmt.Errorf("executing hook %s: %w", hookPath, err)
+	}
+	return nil
 }
 
 func applyManifests(ctx context.Context, kubeClient *kube.Kube, dir string, namespace string) error {
@@ -195,6 +220,14 @@ func extractAndApplyAppsFromManifestsYAML(ctx context.Context, path string, kube
 
 	if len(appSets) > 0 {
 		for _, appSet := range appSets {
+			hookPath := filepath.Join(DirHooks, "before-appset-gen.sh")
+			err := executeHookIfExists(ctx, hookPath, map[string]string{
+				"APPSET_YAML": appSet,
+			})
+			if err != nil {
+				return false, fmt.Errorf("executing before-appset-gen hook: %w", err)
+			}
+
 			genApps, err := acd.GenerateAppsFromAppSets(ctx, appSet)
 			if err != nil {
 				base := filepath.Base(appSet)
@@ -214,6 +247,14 @@ func extractAndApplyAppsFromManifestsYAML(ctx context.Context, path string, kube
 
 	added := false
 	for _, app := range apps {
+		hookPath := filepath.Join(DirHooks, "before-app-apply.sh")
+		err := executeHookIfExists(ctx, hookPath, map[string]string{
+			"APP_YAML": app,
+		})
+		if err != nil {
+			return false, fmt.Errorf("executing before-app-apply hook: %w", err)
+		}
+
 		err2 := kubeClient.ApplyFile(ctx, app, acd.Namespace())
 		if err2 != nil {
 			return added, fmt.Errorf("applying app manifest from %s: %w", app, err2)
