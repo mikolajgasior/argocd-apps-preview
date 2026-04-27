@@ -1,10 +1,25 @@
 package main
 
 const (
+	MaxRecursions                  = 7
+	CtxClusterTimeoutSeconds       = 120
+	CtxArgoCDTimeoutSeconds        = 360
+	SleepSecondsAfterArgoCDInstall = 4
+)
+
+const (
+	KindName        = "argocd-app-prev"
+	KindImage       = "kindest/node:v1.33.4"
+	ArgoCDNamespace = "tools"
+	ArgoCDVersion   = "v2.14.11"
+	ArgoCDNodePort  = 30443
+)
+
+const (
 	ExitKindNotFound                  = 101
 	ExitArgoCDNotFound                = 102
 	ExitKubectlNotFound               = 103
-	ExitManifestsDirNotFound          = 104
+	ExitDirNotFound                   = 104
 	ExitOutputsDirNotFound            = 105
 	ExitOutputsDirNotEmpty            = 106
 	ExitCreatingClusterFailed         = 201
@@ -20,8 +35,6 @@ const (
 	ErrMsgKindNotFound                  = "kind not found in PATH"
 	ErrMsgArgoCDNotFound                = "argocd not found in PATH"
 	ErrMsgKubectlNotFound               = "kubectl not found in PATH"
-	ErrMsgManifestsDirNotFound          = "manifests directory not found"
-	ErrMsgOutputsDirNotFound            = "outputs directory not found"
 	ErrMsgOutputsDirNotEmpty            = "outputs directory is not empty"
 	ErrMsgCreatingClusterFailed         = "Error creating kind cluster"
 	ErrMsgArgoCDInstallationFailed      = "Error installing ArgoCD"

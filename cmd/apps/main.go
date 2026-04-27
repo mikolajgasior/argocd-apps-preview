@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -14,13 +15,64 @@ import (
 	"github.com/mikolajgasior/argocd-apps-preview/pkg/kind"
 	"github.com/mikolajgasior/argocd-apps-preview/pkg/kube"
 	"github.com/mikolajgasior/argocd-apps-preview/pkg/logmsg"
+	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
+)
+
+var (
+	regexpRepoURL = regexp.MustCompile(`^(https:\/\/|ssh:\/\/|git@)[\w\-\.]+(:|\/)[\w\-\/]+(\.git)?$`)
+	regexpGitRef  = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
 )
 
 func main() {
-	// check required software and necessary local directories
-	checkPrerequisites()
-	checkManifestsDir()
-	checkOutputsDir()
+	var outputAppsDir string
+	var hooksDir string
+	var manifestsDir string
+	var secretsDir string
+	var repoURL string
+	var targetRevision string
+
+	rootCmd := &cobra.Command{
+		Use:   "apps",
+		Short: "ArgoCD Apps Preview",
+		PreRunE: func(cmd *cobra.Command, args []string) error {
+			if repoURL != "" || targetRevision != "" {
+				if !regexpRepoURL.MatchString(repoURL) {
+					return fmt.Errorf("invalid repository URL: %s", repoURL)
+				}
+				if !regexpGitRef.MatchString(targetRevision) {
+					return fmt.Errorf("invalid target revision: %s", targetRevision)
+				}
+			}
+			return nil
+		},
+		Run: func(cmd *cobra.Command, args []string) {
+			checkPrerequisites()
+			checkDirs(manifestsDir, secretsDir, hooksDir, outputAppsDir)
+			execute(manifestsDir, secretsDir, hooksDir, outputAppsDir, repoURL, targetRevision)
+		},
+	}
+
+	rootCmd.Flags().StringVar(&manifestsDir, "manifests", "", "Directory with start manifests")
+	rootCmd.Flags().StringVar(&secretsDir, "secrets", "", "Directory with secrets")
+	rootCmd.Flags().StringVar(&hooksDir, "hooks", "", "Directory for hooks scripts")
+	rootCmd.Flags().StringVar(&outputAppsDir, "output-apps", "", "Directory to output app manifests")
+	rootCmd.Flags().StringVar(&repoURL, "replace-repo-url", "", "Repository URL to replace")
+	rootCmd.Flags().StringVar(&targetRevision, "replace-target-revision", "", "Target revision to replace")
+	_ = rootCmd.MarkFlagRequired("manifests")
+	_ = rootCmd.MarkFlagRequired("outputs")
+
+	err := rootCmd.Execute()
+	if err != nil {
+		logmsg.Error("Error executing command", err)
+		os.Exit(1)
+	}
+}
+
+func execute(manifestsDir, secretsDir, hooksDir, outputAppsDir, repoURL, revision string) {
+	if repoURL != "" && revision != "" {
+		logmsg.Info(fmt.Sprintf("Changing repository URL and target revision to: %s %s", repoURL, revision))
+	}
 
 	// start kind cluster
 	cluster := kind.NewKind(KindName, KindImage)
@@ -64,14 +116,16 @@ func main() {
 	}
 
 	// apply manifests from the secrets (to allow argocd pull from private repositories etc.)
-	err = applyManifests(ctxArgoCD, kubeClient, DirSecrets, ArgoCDNamespace)
-	if err != nil {
-		logmsg.Error(ErrMsgApplyingSecretsFailed, err)
-		os.Exit(ExitApplyingSecretsFailed)
+	if secretsDir != "" {
+		err = applyManifests(ctxArgoCD, kubeClient, secretsDir, ArgoCDNamespace)
+		if err != nil {
+			logmsg.Error(ErrMsgApplyingSecretsFailed, err)
+			os.Exit(ExitApplyingSecretsFailed)
+		}
 	}
 
 	// apply initial manifests (we need to start somewhere)
-	err = applyAppManifestsFromDir(ctxArgoCD, kubeClient, acd, DirManifests)
+	err = applyAppManifestsFromDir(ctxArgoCD, kubeClient, acd, manifestsDir, hooksDir, [2]string{repoURL, revision})
 	if err != nil {
 		logmsg.Error(ErrMsgApplyingManifestsFailed, err)
 		os.Exit(ExitApplyingManifestsFailed)
@@ -85,7 +139,7 @@ func main() {
 	logmsg.Info("Starting to recursively apply applications...")
 	numRecursions := 0
 	processedApps := map[string]struct{}{}
-	err = recursivelyApplyApps(ctxRecursiveApply, kubeClient, acd, &numRecursions, &processedApps)
+	err = recursivelyApplyApps(ctxRecursiveApply, kubeClient, acd, &numRecursions, &processedApps, hooksDir, [2]string{repoURL, revision})
 	if err != nil {
 		logmsg.Error(ErrMsgRecursivelyApplyingAppsFailed, err)
 		os.Exit(ExitRecursivelyApplyingAppsFailed)
@@ -93,12 +147,12 @@ func main() {
 	logmsg.Info("Finished recursively applying applications.")
 
 	// dump app manifests to the outputs directory
-	err = dumpAppManifests(ctxArgoCD, acd, DirOutputs)
+	err = dumpAppManifests(ctxArgoCD, acd, outputAppsDir)
 	if err != nil {
 		logmsg.Error(ErrMsgDumpingAppManifestsFailed, err)
 		os.Exit(ExitDumpingAppManifestsFailed)
 	}
-	logmsg.Info(fmt.Sprintf("Finished dumping app manifests to %s directory.", DirOutputs))
+	logmsg.Info(fmt.Sprintf("Finished dumping app manifests to %s directory.", outputAppsDir))
 }
 
 func getKubeContext() string {
@@ -166,7 +220,7 @@ func applyManifests(ctx context.Context, kubeClient *kube.Kube, dir string, name
 	return nil
 }
 
-func applyAppManifestsFromDir(ctx context.Context, kubeClient *kube.Kube, acd *argocd.ArgoCD, dir string) error {
+func applyAppManifestsFromDir(ctx context.Context, kubeClient *kube.Kube, acd *argocd.ArgoCD, dir string, hooksDir string, target [2]string) error {
 	info, err := os.Stat(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -189,7 +243,7 @@ func applyAppManifestsFromDir(ctx context.Context, kubeClient *kube.Kube, acd *a
 
 		ext := strings.ToLower(filepath.Ext(d.Name()))
 		if ext == ".yaml" || ext == ".yml" {
-			_, err2 := extractAndApplyAppsFromManifestsYAML(ctx, path, kubeClient, acd)
+			_, err2 := extractAndApplyAppsFromManifestsYAML(ctx, path, kubeClient, acd, hooksDir, target)
 			if err2 != nil {
 				return fmt.Errorf("extracting and applying apps from manifests yaml: %w", err2)
 			}
@@ -203,7 +257,7 @@ func applyAppManifestsFromDir(ctx context.Context, kubeClient *kube.Kube, acd *a
 	return nil
 }
 
-func extractAndApplyAppsFromManifestsYAML(ctx context.Context, path string, kubeClient *kube.Kube, acd *argocd.ArgoCD) (bool, error) {
+func extractAndApplyAppsFromManifestsYAML(ctx context.Context, path string, kubeClient *kube.Kube, acd *argocd.ArgoCD, hooksDir string, target [2]string) (bool, error) {
 	apps, appSets, appProjects, err := kube.ExtractAppsFromYAML(path)
 	if err != nil {
 		return false, fmt.Errorf("extracting apps from yaml: %w", err)
@@ -220,12 +274,21 @@ func extractAndApplyAppsFromManifestsYAML(ctx context.Context, path string, kube
 
 	if len(appSets) > 0 {
 		for _, appSet := range appSets {
-			hookPath := filepath.Join(DirHooks, "before-appset-gen.sh")
+			hookPath := filepath.Join(hooksDir, "before-appset-gen.sh")
 			err := executeHookIfExists(ctx, hookPath, map[string]string{
 				"APPSET_YAML": appSet,
 			})
 			if err != nil {
 				return false, fmt.Errorf("executing before-appset-gen hook: %w", err)
+			}
+
+			if target[0] != "" && target[1] != "" {
+				modifiedAppSet, err := replaceRepoURLAndTargetRevision(appSet, target[0], target[1])
+				if err != nil {
+					return false, fmt.Errorf("replacing repo URL and target revision in appset %s: %w", appSet, err)
+				}
+
+				appSet = modifiedAppSet
 			}
 
 			genApps, err := acd.GenerateAppsFromAppSets(ctx, appSet)
@@ -247,12 +310,21 @@ func extractAndApplyAppsFromManifestsYAML(ctx context.Context, path string, kube
 
 	added := false
 	for _, app := range apps {
-		hookPath := filepath.Join(DirHooks, "before-app-apply.sh")
+		hookPath := filepath.Join(hooksDir, "before-app-apply.sh")
 		err := executeHookIfExists(ctx, hookPath, map[string]string{
 			"APP_YAML": app,
 		})
 		if err != nil {
 			return false, fmt.Errorf("executing before-app-apply hook: %w", err)
+		}
+
+		if target[0] != "" && target[1] != "" {
+			modifiedApp, err := replaceRepoURLAndTargetRevision(app, target[0], target[1])
+			if err != nil {
+				return false, fmt.Errorf("replacing repo URL and target revision in appset %s: %w", app, err)
+			}
+
+			app = modifiedApp
 		}
 
 		err2 := kubeClient.ApplyFile(ctx, app, acd.Namespace())
@@ -266,7 +338,7 @@ func extractAndApplyAppsFromManifestsYAML(ctx context.Context, path string, kube
 	return added, nil
 }
 
-func recursivelyApplyApps(ctx context.Context, kubeClient *kube.Kube, acd *argocd.ArgoCD, numRecursions *int, processedApps *map[string]struct{}) error {
+func recursivelyApplyApps(ctx context.Context, kubeClient *kube.Kube, acd *argocd.ArgoCD, numRecursions *int, processedApps *map[string]struct{}, hooksDir string, target [2]string) error {
 	*numRecursions++
 	if *numRecursions > MaxRecursions {
 		return fmt.Errorf("max recursions of %d reached", MaxRecursions)
@@ -286,7 +358,7 @@ func recursivelyApplyApps(ctx context.Context, kubeClient *kube.Kube, acd *argoc
 
 		logmsg.Info(fmt.Sprintf("Scanning application %s (recursion: %d)...", app, *numRecursions))
 
-		// check if app has been already processed
+		// check if the app has been already processed
 		_, ok := (*processedApps)[app]
 		if ok {
 			continue
@@ -302,7 +374,7 @@ func recursivelyApplyApps(ctx context.Context, kubeClient *kube.Kube, acd *argoc
 			return fmt.Errorf("getting app %s manifests: %w", app, err)
 		}
 
-		addedApps, err := extractAndApplyAppsFromManifestsYAML(ctx, manifests, kubeClient, acd)
+		addedApps, err := extractAndApplyAppsFromManifestsYAML(ctx, manifests, kubeClient, acd, hooksDir, target)
 		if err != nil {
 			return fmt.Errorf("extracting and applying apps from manifests yaml: %w", err)
 		}
@@ -315,13 +387,97 @@ func recursivelyApplyApps(ctx context.Context, kubeClient *kube.Kube, acd *argoc
 	}
 
 	if added {
-		err := recursivelyApplyApps(ctx, kubeClient, acd, numRecursions, processedApps)
+		err := recursivelyApplyApps(ctx, kubeClient, acd, numRecursions, processedApps, hooksDir, target)
 		if err != nil {
 			return fmt.Errorf("recursively applying apps (recursion: %d): %w", *numRecursions, err)
 		}
 	}
 
 	return nil
+}
+
+func replaceRepoURLAndTargetRevision(appSet string, repoURL string, targetRevision string) (string, error) {
+	logmsg.Info(fmt.Sprintf("Changing target revision to %s in repository %s...", targetRevision, repoURL))
+
+	appSetYAML, err := os.ReadFile(appSet)
+	if err != nil {
+		return "", fmt.Errorf("reading appset %s: %w", appSet, err)
+	}
+
+	var rootNode yaml.Node
+	err = yaml.Unmarshal(appSetYAML, &rootNode)
+	if err != nil {
+		return "", fmt.Errorf("parsing YAML document: %w", err)
+	}
+
+	updated := false
+	var traverse func(node *yaml.Node) error
+	traverse = func(node *yaml.Node) error {
+		if node == nil {
+			return nil
+		}
+
+		if node.Kind != yaml.MappingNode {
+			for _, child := range node.Content {
+				err := traverse(child)
+				if err != nil {
+					return err
+				}
+			}
+
+			return nil
+		}
+
+		for i := 0; i < len(node.Content); i += 2 {
+			key := node.Content[i]
+			value := node.Content[i+1]
+
+			if key.Value == "repoURL" && value.Value == repoURL {
+				logmsg.Info(fmt.Sprintf("Found key %s with value %s...", key.Value, value.Value))
+				for j := 0; j < len(node.Content); j += 2 {
+					siblingKey := node.Content[j]
+					siblingValue := node.Content[j+1]
+
+					if siblingKey.Value == "revision" || siblingKey.Value == "targetRevision" {
+						logmsg.Info(fmt.Sprintf("Found sibling key %s with value %s...", siblingKey.Value, siblingValue.Value))
+						siblingValue.Value = targetRevision
+						updated = true
+					}
+				}
+			}
+
+			err := traverse(value)
+			if err != nil {
+				return err
+			}
+		}
+
+		return nil
+	}
+
+	err = traverse(&rootNode)
+	if err != nil {
+		return "", fmt.Errorf("traversing YAML document: %w", err)
+	}
+
+	if !updated {
+		return appSet, nil
+	}
+
+	logmsg.Info(fmt.Sprintf("Changed targetRevision in %s...", appSet))
+	newFileName := filepath.Join(filepath.Dir(appSet), "B_"+filepath.Base(appSet))
+	newYAML, err := yaml.Marshal(&rootNode)
+	if err != nil {
+		return "", fmt.Errorf("encoding updated YAML: %w", err)
+	}
+
+	err = os.WriteFile(newFileName, newYAML, 0644)
+	if err != nil {
+		return "", fmt.Errorf("writing updated YAML to file %s: %w", newFileName, err)
+	}
+
+	return newFileName, nil
+
 }
 
 func dumpAppManifests(ctx context.Context, acd *argocd.ArgoCD, dir string) error {

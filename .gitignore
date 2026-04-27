@@ -32,5 +32,6 @@ go.work.sum
 .vscode
 
 /cmd/apps/apps
-/outputs
+/cmd/diff/diff
+/outputs*
 /hooks

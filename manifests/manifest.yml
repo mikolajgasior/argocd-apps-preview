@@ -7,7 +7,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://codeberg.org/mikolajgasior/apps-of-apps-example
+    repoURL: https://github.com/mikolajgasior/apps-of-apps-example
     targetRevision: HEAD
     path: stage0-app
   destination:

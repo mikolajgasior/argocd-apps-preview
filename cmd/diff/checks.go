@@ -11,27 +11,15 @@ import (
 func checkPrerequisites() {
 	logmsg.Info("Checking prerequisites...")
 
-	_, err := exec.LookPath("kind")
+	_, err := exec.LookPath("git")
 	if err != nil {
-		logmsg.Error(ErrMsgKindNotFound, nil)
-		os.Exit(ExitKindNotFound)
-	}
-
-	_, err = exec.LookPath("argocd")
-	if err != nil {
-		logmsg.Error(ErrMsgArgoCDNotFound, nil)
-		os.Exit(ExitArgoCDNotFound)
-	}
-
-	_, err = exec.LookPath("kubectl")
-	if err != nil {
-		logmsg.Error(ErrMsgKubectlNotFound, nil)
-		os.Exit(ExitKubectlNotFound)
+		logmsg.Error(ErrMsgGitNotFound, nil)
+		os.Exit(ExitGitNotFound)
 	}
 }
 
-func checkDirs(manifests, secrets, hooks, outputs string) {
-	for _, dir := range [4]string{manifests, secrets, hooks, outputs} {
+func checkDirs(appsBase, appsTarget, outputDiff string) {
+	for _, dir := range [4]string{appsBase, appsTarget, outputDiff} {
 		if dir == "" {
 			continue
 		}
@@ -50,9 +38,9 @@ func checkDirs(manifests, secrets, hooks, outputs string) {
 			os.Exit(ExitDirNotFound)
 		}
 	}
-	entries, err := os.ReadDir(outputs)
+	entries, err := os.ReadDir(outputDiff)
 	if err != nil {
-		logmsg.Error(fmt.Sprintf("Error reading %s directory: %v", outputs, err), nil)
+		logmsg.Error(fmt.Sprintf("Error reading %s directory: %v", outputDiff, err), nil)
 		os.Exit(ExitOutputsDirNotFound)
 	}
 	if len(entries) > 0 {
